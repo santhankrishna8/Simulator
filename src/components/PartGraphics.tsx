@@ -1,0 +1,532 @@
+"use client";
+
+import { memo } from "react";
+import { BB_COLS, BB_H, BB_W, HOLES, LED_COLORS, ROW_LETTERS, formatSI, resistorBands } from "@/sim/catalog";
+import type { PartLive } from "@/sim/engine";
+import type { Part } from "@/sim/model";
+import { useStore } from "@/store";
+
+/** SVG units per grid unit (0.1 inch). */
+export const U = 10;
+
+const LEAD = "#b4b8bc";
+const LEAD_DARK = "#8b9095";
+
+/** Shared gradients and filters; rendered once at the app root. */
+export function GraphicsDefs() {
+  return (
+    <svg width="0" height="0" style={{ position: "absolute" }} aria-hidden>
+      <defs>
+        <linearGradient id="g-metal" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#f1f3f4" />
+          <stop offset="0.45" stopColor="#c3c8cc" />
+          <stop offset="1" stopColor="#8e959b" />
+        </linearGradient>
+        <linearGradient id="g-metal-h" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stopColor="#9aa1a7" />
+          <stop offset="0.3" stopColor="#eef0f1" />
+          <stop offset="0.7" stopColor="#c3c8cc" />
+          <stop offset="1" stopColor="#868d93" />
+        </linearGradient>
+        <linearGradient id="g-shade-v" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#fff" stopOpacity="0.38" />
+          <stop offset="0.5" stopColor="#fff" stopOpacity="0" />
+          <stop offset="1" stopColor="#000" stopOpacity="0.28" />
+        </linearGradient>
+        <linearGradient id="g-shade-h" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stopColor="#000" stopOpacity="0.3" />
+          <stop offset="0.25" stopColor="#fff" stopOpacity="0.22" />
+          <stop offset="0.6" stopColor="#fff" stopOpacity="0" />
+          <stop offset="1" stopColor="#000" stopOpacity="0.34" />
+        </linearGradient>
+        <radialGradient id="g-dome" cx="0.35" cy="0.3" r="0.8">
+          <stop offset="0" stopColor="#fff" stopOpacity="0.55" />
+          <stop offset="0.4" stopColor="#fff" stopOpacity="0.08" />
+          <stop offset="1" stopColor="#000" stopOpacity="0.25" />
+        </radialGradient>
+        {Object.entries(LED_COLORS).map(([key, spec]) => (
+          <radialGradient key={key} id={`g-glow-${key}`}>
+            <stop offset="0" stopColor="#fff" stopOpacity="0.9" />
+            <stop offset="0.22" stopColor={spec.lit} stopOpacity="0.75" />
+            <stop offset="0.6" stopColor={spec.lit} stopOpacity="0.22" />
+            <stop offset="1" stopColor={spec.lit} stopOpacity="0" />
+          </radialGradient>
+        ))}
+        <radialGradient id="g-disc" cx="0.38" cy="0.32" r="0.75">
+          <stop offset="0" stopColor="#4a4e53" />
+          <stop offset="1" stopColor="#141618" />
+        </radialGradient>
+      </defs>
+    </svg>
+  );
+}
+
+/* ---------- Breadboard ---------- */
+
+export const Breadboard = memo(function Breadboard() {
+  const w = BB_W * U;
+  const h = BB_H * U;
+  const nums = [1, 5, 10, 15, 20, 25, 30];
+  return (
+    <g>
+      <rect x={0} y={0} width={w} height={h} rx={5} fill="#efede6" stroke="#d2cfc4" strokeWidth={0.8} />
+      <rect x={1} y={1} width={w - 2} height={h - 2} rx={4} fill="none" stroke="#fff" strokeOpacity={0.7} strokeWidth={0.8} />
+      {/* centre trench */}
+      <rect x={4} y={9.5 * U - 4} width={w - 8} height={8} rx={2} fill="#dcd9cf" />
+      <rect x={4} y={9.5 * U - 4} width={w - 8} height={1.2} fill="#c3c0b4" />
+      {/* power rail guide lines */}
+      {[0.45, 16.45].map((y) => (
+        <line key={y} x1={U * 0.7} x2={w - U * 0.7} y1={y * U} y2={y * U} stroke="#d63a2f" strokeWidth={0.9} />
+      ))}
+      {[2.55, 18.55].map((y) => (
+        <line key={y} x1={U * 0.7} x2={w - U * 0.7} y1={y * U} y2={y * U} stroke="#2f6fd6" strokeWidth={0.9} />
+      ))}
+      {[1, 17].map((y) => (
+        <g key={y} fontSize={5} fontWeight={600} textAnchor="middle" fontFamily="var(--font-mono)">
+          <text x={3.2} y={y * U + 1.8} fill="#d63a2f">+</text>
+          <text x={3.2} y={(y + 1) * U + 1.8} fill="#2f6fd6">−</text>
+          <text x={w - 3.2} y={y * U + 1.8} fill="#d63a2f">+</text>
+          <text x={w - 3.2} y={(y + 1) * U + 1.8} fill="#2f6fd6">−</text>
+        </g>
+      ))}
+      <g fontSize={3.6} fill="#9a968a" textAnchor="middle" fontFamily="var(--font-mono)">
+        {nums.map((n) => (
+          <g key={n}>
+            <text x={n * U} y={3 * U + 1.3}>{n}</text>
+            <text x={n * U} y={16 * U + 1.3}>{n}</text>
+          </g>
+        ))}
+        {Object.entries(ROW_LETTERS).map(([y, letter]) => (
+          <g key={y}>
+            <text x={3.4} y={Number(y) * U + 1.3}>{letter}</text>
+            <text x={(BB_COLS + 1) * U - 3.4} y={Number(y) * U + 1.3}>{letter}</text>
+          </g>
+        ))}
+      </g>
+      {HOLES.map((hole) => (
+        <g key={hole.id}>
+          <rect x={hole.x * U - 2.1} y={hole.y * U - 2.1} width={4.2} height={4.2} rx={0.9} fill="#d9d6cb" />
+          <rect x={hole.x * U - 1.5} y={hole.y * U - 1.5} width={3} height={3} rx={0.5} fill="#2b2c2e" />
+        </g>
+      ))}
+    </g>
+  );
+});
+
+/* ---------- Leads and helpers ---------- */
+
+function Lead({ d }: { d: string }) {
+  return (
+    <>
+      <path d={d} fill="none" stroke={LEAD_DARK} strokeWidth={1.7} strokeLinecap="round" />
+      <path d={d} fill="none" stroke={LEAD} strokeWidth={1} strokeLinecap="round" />
+    </>
+  );
+}
+
+/** Flexible insulated lead from a device to its wiring pin. */
+function FlyLead({ d, color }: { d: string; color: string }) {
+  return (
+    <>
+      <path d={d} fill="none" stroke="rgba(0,0,0,0.35)" strokeWidth={3.6} strokeLinecap="round" />
+      <path d={d} fill="none" stroke={color} strokeWidth={2.8} strokeLinecap="round" />
+      <path d={d} fill="none" stroke="#fff" strokeOpacity={0.22} strokeWidth={0.8} strokeLinecap="round" transform="translate(-0.5,-0.5)" />
+    </>
+  );
+}
+
+function PinTip({ x, y }: { x: number; y: number }) {
+  return (
+    <>
+      <circle cx={x} cy={y} r={2.4} fill="#6f757b" />
+      <circle cx={x} cy={y} r={1.6} fill="url(#g-metal)" />
+    </>
+  );
+}
+
+/* ---------- Passive parts ---------- */
+
+function Resistor({ part, live }: GProps) {
+  const bands = resistorBands(Number(part.props.ohms));
+  const burned = live?.burned;
+  const hot = !burned && (live?.p ?? 0) > 0.25;
+  const body = "M11 0 C11 -4.6 15 -4.2 17 -3.3 L23 -3.3 C25 -4.2 29 -4.6 29 0 C29 4.6 25 4.2 23 3.3 L17 3.3 C15 4.2 11 4.6 11 0 Z";
+  return (
+    <g>
+      <Lead d="M0 0 H40" />
+      <path d={body} fill={burned ? "#2a211b" : "#dcc7a1"} />
+      {!burned &&
+        [13.4, 17.4, 20.6, 25.4].map((x, i) => (
+          <rect key={i} x={x} y={i === 0 || i === 3 ? -4 : -3.3} width={1.9} height={i === 0 || i === 3 ? 8 : 6.6} fill={bands[i]} clipPath="none" />
+        ))}
+      <path d={body} fill="url(#g-shade-v)" />
+      {hot && <path d={body} fill="#ff5a1f" opacity={0.45} className="pulse" />}
+      {burned && <path d="M15 -3 l3 2 l-2 2 l4 2" stroke="#6b5a4c" strokeWidth={0.6} fill="none" />}
+    </g>
+  );
+}
+
+function Diode() {
+  return (
+    <g>
+      <Lead d="M0 0 H40" />
+      <rect x={11.5} y={-3.6} width={17} height={7.2} rx={1.6} fill="#1c1d1f" />
+      <rect x={24} y={-3.6} width={2.6} height={7.2} fill="#c9cdd1" />
+      <rect x={11.5} y={-3.6} width={17} height={7.2} rx={1.6} fill="url(#g-shade-v)" />
+    </g>
+  );
+}
+
+function Led({ part, live }: GProps) {
+  const spec = LED_COLORS[String(part.props.color)] ?? LED_COLORS.red;
+  const burned = live?.burned;
+  const glow = burned ? 0 : (live?.glow ?? 0);
+  const dome = "M-5 -17 V-34 A10 10 0 0 1 15 -34 V-17 Z";
+  return (
+    <g>
+      <Lead d="M0 0 V-16" />
+      <Lead d="M10 0 V-16" />
+      <text x={-4.6} y={-4} fontSize={5} fontWeight={600} fill="#6b7175" textAnchor="middle" fontFamily="var(--font-mono)">+</text>
+      {glow > 0.02 && (
+        <circle cx={5} cy={-32} r={16 + glow * 26} fill={`url(#g-glow-${LED_COLORS[String(part.props.color)] ? part.props.color : "red"})`} opacity={Math.min(1, 0.25 + glow * 0.75)} />
+      )}
+      <rect x={-6.4} y={-19.4} width={22.8} height={3.4} rx={1.2} fill={burned ? "#3a3a3a" : spec.body} />
+      <path d="M15 -19.4 h1.4 v3.4 h-1.4 z" fill="#000" opacity={0.25} />
+      <path d={dome} fill={burned ? "#4a4744" : spec.body} opacity={burned ? 1 : 0.86} />
+      {/* internal anvil and post */}
+      <path d="M0 -17 V-27 h3 M10 -17 V-30 h-5 v3" fill="none" stroke="#000" strokeOpacity={0.28} strokeWidth={1.3} />
+      {glow > 0.02 && <path d={dome} fill={spec.lit} opacity={glow * 0.9} />}
+      {glow > 0.3 && <ellipse cx={5} cy={-30} rx={5 * glow} ry={6 * glow} fill="#fff" opacity={glow * 0.8} />}
+      <path d={dome} fill="url(#g-dome)" />
+      {burned && <path d="M0 -40 l3 6 l-3 4 l5 5 M9 -36 l-2 5" stroke="#1d1b19" strokeWidth={0.8} fill="none" />}
+    </g>
+  );
+}
+
+function Capacitor({ part }: GProps) {
+  return (
+    <g>
+      <Lead d="M0 0 V-12" />
+      <Lead d="M10 0 V-12" />
+      <rect x={-6} y={-56} width={22} height={44} rx={3} fill="#1d2b4f" />
+      <rect x={9.5} y={-55} width={5} height={42} fill="#cfd6e4" opacity={0.92} />
+      {[-46, -34, -22].map((y) => (
+        <rect key={y} x={10.8} y={y} width={2.4} height={0.9} fill="#1d2b4f" />
+      ))}
+      <rect x={-6} y={-56} width={22} height={3} rx={1.5} fill="#aeb4ba" />
+      <rect x={-6} y={-56} width={22} height={44} rx={3} fill="url(#g-shade-h)" />
+      <text x={2} y={-22} fontSize={4.2} fill="#dfe6f5" fontFamily="var(--font-mono)" transform="rotate(-90 2 -22)">
+        {formatSI(Number(part.props.farads), "F", 2).replace(" ", "")}
+      </text>
+    </g>
+  );
+}
+
+function Ldr() {
+  return (
+    <g>
+      <Lead d="M0 0 V-22" />
+      <Lead d="M10 0 V-22" />
+      <circle cx={5} cy={-32} r={11.5} fill="#b9772a" />
+      <circle cx={5} cy={-32} r={10} fill="#e4b062" />
+      <path d="M-2 -38 h14 M12 -38 v3 h-14 v3 h14 v3 h-14 v3 h14" fill="none" stroke="#8c3b1f" strokeWidth={1.1} />
+      <circle cx={5} cy={-32} r={11.5} fill="url(#g-dome)" />
+    </g>
+  );
+}
+
+/* ---------- Inputs ---------- */
+
+function Button({ part }: GProps) {
+  const pressed = useStore((s) => s.pressed.has(part.id));
+  const set = useStore((s) => s.setPressed);
+  return (
+    <g>
+      {[0, 20].map((x) =>
+        [0, 30].map((y) => <rect key={`${x}${y}`} x={x - 1.4} y={y === 0 ? 0 : 24} width={2.8} height={6} rx={0.6} fill="url(#g-metal-h)" />),
+      )}
+      <rect x={-2.5} y={2.5} width={25} height={25} rx={2.2} fill="#26282b" />
+      <rect x={-0.6} y={4.4} width={21.2} height={21.2} rx={1.4} fill="url(#g-metal)" />
+      {[
+        [1.6, 6.6], [18.4, 6.6], [1.6, 23.4], [18.4, 23.4],
+      ].map(([x, y]) => (
+        <circle key={`${x}-${y}`} cx={x} cy={y} r={1.1} fill="#1b1c1e" />
+      ))}
+      <g
+        className="hit-control"
+        role="button"
+        aria-label="Push button"
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          (e.currentTarget as Element).setPointerCapture(e.pointerId);
+          set(part.id, true);
+        }}
+        onPointerUp={() => set(part.id, false)}
+        onPointerCancel={() => set(part.id, false)}
+      >
+        <circle cx={10} cy={15} r={7.6} fill="#0f1011" />
+        <circle cx={10} cy={pressed ? 15 : 14.3} r={pressed ? 6.2 : 6.8} fill={pressed ? "#2c2f33" : "#3b3f44"} />
+        <circle cx={10} cy={pressed ? 15 : 14.3} r={pressed ? 6.2 : 6.8} fill="url(#g-dome)" opacity={pressed ? 0.4 : 1} />
+      </g>
+    </g>
+  );
+}
+
+function Switch({ part }: GProps) {
+  const on = Number(part.props.pos) === 1;
+  const setProp = useStore((s) => s.setProp);
+  return (
+    <g>
+      {[0, 10, 20].map((x) => (
+        <Lead key={x} d={`M${x} 0 V-8`} />
+      ))}
+      <rect x={-9} y={-27} width={38} height={20} rx={1.6} fill="url(#g-metal)" stroke="#7d848a" strokeWidth={0.6} />
+      <rect x={-3} y={-21.5} width={26} height={9} rx={1} fill="#17181a" />
+      <g
+        className="hit-control"
+        role="switch"
+        aria-checked={on}
+        aria-label="Slide switch"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={() => setProp(part.id, "pos", on ? 0 : 1)}
+      >
+        <rect x={-9} y={-34} width={38} height={27} fill="transparent" />
+        <rect x={on ? 10.5 : -1.5} y={-33.5} width={11} height={20} rx={1.2} fill="#2c2f33" style={{ transition: "x 90ms ease-out" }} />
+        <rect x={on ? 10.5 : -1.5} y={-33.5} width={11} height={20} rx={1.2} fill="url(#g-shade-h)" style={{ transition: "x 90ms ease-out" }} />
+      </g>
+    </g>
+  );
+}
+
+function Pot({ part }: GProps) {
+  const t = Number(part.props.t);
+  const angle = -135 + t * 270;
+  return (
+    <g>
+      {[0, 10, 20].map((x) => (
+        <Lead key={x} d={`M${x} 0 V-12`} />
+      ))}
+      <rect x={-9} y={-50} width={38} height={38} rx={3} fill="#2a63b8" />
+      <rect x={-9} y={-50} width={38} height={38} rx={3} fill="url(#g-shade-v)" />
+      <circle cx={10} cy={-31} r={14.5} fill="#1a3f78" />
+      <g transform={`rotate(${angle} 10 -31)`}>
+        <circle cx={10} cy={-31} r={12.5} fill="#f1efe9" />
+        <circle cx={10} cy={-31} r={12.5} fill="url(#g-dome)" />
+        <rect x={8.9} y={-42.5} width={2.2} height={12} rx={1} fill="#2b2d30" />
+      </g>
+      <text x={10} y={-13.6} fontSize={3.6} textAnchor="middle" fill="#dbe7fb" fontFamily="var(--font-mono)">
+        {formatSI(Number(part.props.ohms), "Ω", 2).replace(" ", "")}
+      </text>
+    </g>
+  );
+}
+
+/* ---------- Outputs ---------- */
+
+function Buzzer({ live }: GProps) {
+  return (
+    <g>
+      {live?.sounding &&
+        [0, 1, 2].map((i) => (
+          <circle key={i} cx={15} cy={0} r={24} fill="none" stroke="#0d7480" strokeWidth={1.2} className="ring" style={{ animationDelay: `${i * 0.3}s` }} />
+        ))}
+      <circle cx={15} cy={0.8} r={24} fill="#000" opacity={0.25} />
+      <circle cx={15} cy={0} r={24} fill="url(#g-disc)" />
+      <circle cx={15} cy={0} r={20.5} fill="none" stroke="#000" strokeOpacity={0.35} strokeWidth={0.8} />
+      <circle cx={15} cy={0} r={3.4} fill="#050506" />
+      <text x={-1} y={-10} fontSize={7} fontWeight={600} fill="#d5d9dc" textAnchor="middle" fontFamily="var(--font-mono)">+</text>
+      <PinTip x={0} y={0} />
+      <PinTip x={30} y={0} />
+    </g>
+  );
+}
+
+function Motor({ live }: GProps) {
+  const deg = ((live?.angle ?? 0.5) * 180) / Math.PI;
+  const rpm = Math.abs(live?.rpm ?? 0);
+  const blur = Math.min(1, rpm / 2500);
+  return (
+    <g>
+      <FlyLead d="M2 -32 C2 -18 0 -12 0 0" color="#d63a2f" />
+      <FlyLead d="M18 -32 C18 -18 20 -12 20 0" color="#1d1f22" />
+      <PinTip x={0} y={0} />
+      <PinTip x={20} y={0} />
+      {/* can, seen from the shaft end */}
+      <rect x={-22} y={-106} width={64} height={72} rx={22} fill="url(#g-metal-h)" stroke="#767d83" strokeWidth={0.7} />
+      <rect x={-13} y={-97} width={46} height={54} rx={16} fill="#e9ecee" opacity={0.5} />
+      <rect x={-6} y={-40} width={32} height={9} rx={2} fill="#f4f1e8" stroke="#bdb9ad" strokeWidth={0.5} />
+      <circle cx={10} cy={-70} r={9} fill="#c98b3a" />
+      {/* propeller */}
+      <g transform={`rotate(${deg} 10 -70)`}>
+        {blur > 0.25 && <circle cx={10} cy={-70} r={50} fill="#0d7480" opacity={0.1 + blur * 0.12} />}
+        <g opacity={1 - blur * 0.75}>
+          {[0, 120, 240].map((a) => (
+            <path key={a} transform={`rotate(${a} 10 -70)`} d="M10 -70 C2 -84 0 -104 9 -120 C18 -110 20 -88 10 -70 Z" fill="#0d7480" />
+          ))}
+        </g>
+        <circle cx={10} cy={-70} r={5.5} fill="#f1f3f4" stroke="#7d848a" strokeWidth={0.6} />
+        <circle cx={10} cy={-70} r={1.6} fill="#7d848a" />
+      </g>
+    </g>
+  );
+}
+
+/* ---------- Power ---------- */
+
+function Battery9V() {
+  return (
+    <g>
+      <FlyLead d="M-10 -34 C-10 -18 0 -16 0 0" color="#d63a2f" />
+      <FlyLead d="M30 -34 C30 -18 20 -16 20 0" color="#1d1f22" />
+      <PinTip x={0} y={0} />
+      <PinTip x={20} y={0} />
+      <rect x={-45} y={-238} width={110} height={190} rx={5} fill="#22272b" />
+      <rect x={-45} y={-238} width={110} height={74} rx={5} fill="#0d7480" />
+      <rect x={-45} y={-172} width={110} height={8} fill="#0a5c66" />
+      <text x={10} y={-190} fontSize={34} fontWeight={600} textAnchor="middle" fill="#f4f7f8" letterSpacing={-1}>9V</text>
+      <text x={10} y={-120} fontSize={7.5} textAnchor="middle" fill="#aeb6bb" fontFamily="var(--font-mono)" letterSpacing={1.2}>ALKALINE</text>
+      <text x={10} y={-106} fontSize={6} textAnchor="middle" fill="#7f888e" fontFamily="var(--font-mono)">6LR61 · 550 mAh</text>
+      <text x={-22} y={-66} fontSize={12} fontWeight={600} textAnchor="middle" fill="#e9605a">+</text>
+      <text x={42} y={-66} fontSize={12} fontWeight={600} textAnchor="middle" fill="#aeb6bb">−</text>
+      <rect x={-45} y={-238} width={110} height={190} rx={5} fill="url(#g-shade-h)" opacity={0.7} />
+      {/* snap connector */}
+      <rect x={-38} y={-54} width={96} height={22} rx={4} fill="#111315" />
+      <circle cx={-12} cy={-43} r={7} fill="#2a2d30" />
+      <circle cx={32} cy={-43} r={7} fill="#2a2d30" />
+      <circle cx={-12} cy={-43} r={3.6} fill="url(#g-metal)" />
+      <circle cx={32} cy={-43} r={3.6} fill="url(#g-metal)" />
+    </g>
+  );
+}
+
+function AAHolder({ cells }: { cells: number }) {
+  const w = cells * 62 + 6;
+  const x0 = 10 - w / 2;
+  return (
+    <g>
+      <FlyLead d={`M${x0 + 14} -34 C${x0 + 14} -14 0 -18 0 0`} color="#d63a2f" />
+      <FlyLead d={`M${x0 + w - 14} -34 C${x0 + w - 14} -14 20 -18 20 0`} color="#1d1f22" />
+      <PinTip x={0} y={0} />
+      <PinTip x={20} y={0} />
+      <rect x={x0} y={-258} width={w} height={226} rx={6} fill="#17191b" />
+      <rect x={x0 + 2} y={-256} width={w - 4} height={222} rx={5} fill="none" stroke="#33373b" strokeWidth={1} />
+      {Array.from({ length: cells }, (_, i) => {
+        const cx = x0 + 3 + i * 62 + 31;
+        const up = i % 2 === 0;
+        return (
+          <g key={i} transform={up ? undefined : `rotate(180 ${cx} -145)`}>
+            <rect x={cx - 6} y={-250} width={12} height={8} rx={2} fill="url(#g-metal-h)" />
+            <rect x={cx - 28} y={-243} width={56} height={196} rx={7} fill="#2a3035" />
+            <rect x={cx - 28} y={-243} width={56} height={58} rx={7} fill="#0d7480" />
+            <rect x={cx - 28} y={-192} width={56} height={7} fill="#0a5c66" />
+            <rect x={cx - 28} y={-62} width={56} height={15} rx={6} fill="#b9bfc4" />
+            <rect x={cx - 28} y={-243} width={56} height={196} rx={7} fill="url(#g-shade-h)" />
+            <g transform={up ? undefined : `rotate(180 ${cx} -145)`}>
+              <text x={cx} y={-136} fontSize={15} fontWeight={600} textAnchor="middle" fill="#f4f7f8">AA</text>
+              <text x={cx} y={-122} fontSize={6} textAnchor="middle" fill="#aeb6bb" fontFamily="var(--font-mono)">1.5 V</text>
+            </g>
+            <text x={cx} y={-208} fontSize={13} fontWeight={600} textAnchor="middle" fill="#f4f7f8" transform={up ? undefined : `rotate(180 ${cx} -212)`}>+</text>
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
+function CoinCell() {
+  return (
+    <g>
+      <rect x={-8} y={-10} width={76} height={12} rx={3} fill="#17191b" />
+      <circle cx={30} cy={-50} r={43} fill="#17191b" />
+      <circle cx={30} cy={-50} r={39} fill="url(#g-metal)" />
+      <circle cx={30} cy={-50} r={39} fill="url(#g-dome)" opacity={0.6} />
+      <circle cx={30} cy={-50} r={33} fill="none" stroke="#8e959b" strokeWidth={0.6} />
+      <text x={30} y={-56} fontSize={18} textAnchor="middle" fill="#6d747a">+</text>
+      <text x={30} y={-40} fontSize={7} textAnchor="middle" fill="#6d747a" fontFamily="var(--font-mono)" letterSpacing={0.6}>CR2032</text>
+      <text x={30} y={-30} fontSize={6} textAnchor="middle" fill="#6d747a" fontFamily="var(--font-mono)">3 V</text>
+      <path d="M-6 -62 h14 v24 h-14 z" fill="url(#g-metal-h)" stroke="#7d848a" strokeWidth={0.5} />
+      <text x={-3} y={2.6} fontSize={6} fontWeight={600} fill="#e9605a" fontFamily="var(--font-mono)" transform="translate(6 -9)">+</text>
+      <PinTip x={0} y={0} />
+      <PinTip x={60} y={0} />
+    </g>
+  );
+}
+
+/* ---------- Instruments ---------- */
+
+function Meter({ part, live }: GProps) {
+  const amps = part.props.mode === "A";
+  const setProp = useStore((s) => s.setProp);
+  const reading = live?.reading ?? (amps ? "–.–– A" : "–.–– V");
+  return (
+    <g>
+      <FlyLead d="M0 -32 C0 -18 0 -12 0 0" color="#1d1f22" />
+      <FlyLead d="M30 -32 C30 -18 30 -12 30 0" color="#d63a2f" />
+      <PinTip x={0} y={0} />
+      <PinTip x={30} y={0} />
+      <rect x={-45} y={-220} width={120} height={196} rx={12} fill="#e8a71c" />
+      <rect x={-39} y={-214} width={108} height={184} rx={8} fill="#24282c" />
+      <rect x={-39} y={-214} width={108} height={184} rx={8} fill="url(#g-shade-v)" opacity={0.5} />
+      {/* display */}
+      <rect x={-31} y={-205} width={92} height={46} rx={4} fill="#b9c7b4" />
+      <rect x={-31} y={-205} width={92} height={46} rx={4} fill="none" stroke="#000" strokeOpacity={0.35} />
+      <text x={55} y={-173} fontSize={19} textAnchor="end" fill="#1c2420" fontFamily="var(--font-mono)" fontWeight={500} letterSpacing={-0.5}>
+        {reading}
+      </text>
+      <text x={-26} y={-195} fontSize={5.4} fill="#3d4a42" fontFamily="var(--font-mono)">{amps ? "DC CURRENT" : "DC VOLTAGE"}</text>
+      {/* dial */}
+      <g
+        className="hit-control"
+        role="button"
+        aria-label={`Meter mode: ${amps ? "current" : "voltage"}. Activate to switch.`}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={() => setProp(part.id, "mode", amps ? "V" : "A")}
+      >
+        <circle cx={15} cy={-106} r={34} fill="#191c1f" />
+        <text x={-6} y={-140} fontSize={9} fontWeight={600} fill={amps ? "#7f888e" : "#f4f7f8"} textAnchor="middle">V</text>
+        <text x={36} y={-140} fontSize={9} fontWeight={600} fill={amps ? "#f4f7f8" : "#7f888e"} textAnchor="middle">A</text>
+        <g transform={`rotate(${amps ? 32 : -32} 15 -106)`} style={{ transition: "transform 140ms ease-out" }}>
+          <circle cx={15} cy={-106} r={24} fill="#30353a" />
+          <circle cx={15} cy={-106} r={24} fill="url(#g-dome)" />
+          <rect x={12} y={-131} width={6} height={50} rx={3} fill="#3d4349" />
+          <rect x={13.8} y={-129} width={2.4} height={12} rx={1.2} fill="#f4f7f8" />
+        </g>
+      </g>
+      {/* jacks */}
+      <circle cx={0} cy={-44} r={8} fill="#0d0e10" />
+      <circle cx={0} cy={-44} r={4} fill="#1d1f22" stroke="#4d5359" strokeWidth={1} />
+      <circle cx={30} cy={-44} r={8} fill="#0d0e10" />
+      <circle cx={30} cy={-44} r={4} fill="#d63a2f" stroke="#7d1f18" strokeWidth={1} />
+      <text x={0} y={-56} fontSize={5} textAnchor="middle" fill="#aeb6bb" fontFamily="var(--font-mono)">COM</text>
+      <text x={30} y={-56} fontSize={5} textAnchor="middle" fill="#aeb6bb" fontFamily="var(--font-mono)">V·A</text>
+    </g>
+  );
+}
+
+/* ---------- Dispatcher ---------- */
+
+interface GProps {
+  part: Part;
+  live?: PartLive;
+}
+
+export function PartGraphic({ part, live }: GProps) {
+  switch (part.type) {
+    case "breadboard": return <Breadboard />;
+    case "battery9v": return <Battery9V />;
+    case "batteryAA2": return <AAHolder cells={2} />;
+    case "batteryAA4": return <AAHolder cells={4} />;
+    case "coincell": return <CoinCell />;
+    case "resistor": return <Resistor part={part} live={live} />;
+    case "led": return <Led part={part} live={live} />;
+    case "diode": return <Diode />;
+    case "capacitor": return <Capacitor part={part} />;
+    case "button": return <Button part={part} />;
+    case "switch": return <Switch part={part} />;
+    case "pot": return <Pot part={part} />;
+    case "ldr": return <Ldr />;
+    case "buzzer": return <Buzzer part={part} live={live} />;
+    case "motor": return <Motor part={part} live={live} />;
+    case "meter": return <Meter part={part} live={live} />;
+  }
+}
