@@ -30,9 +30,15 @@ An electronics bench in the browser. Build circuits on a breadboard with real in
 
 These devices need exact timing, which the circuit solver's 0.2 ms steps cannot give. So pin changes reach them with their exact CPU cycle, and what they drive back reaches the chip at an exact cycle.
 
+**I²C and the OLED display**
+
+- A real **I²C bus** on the Uno's A4 and A5 (SDA and SCL), with each byte delayed by its true time (about 90 µs at 100 kHz), so a full-screen redraw takes the real fraction of a second. Devices answer only if they are powered and wired to the right pins, so a missing wire fails the way it does on a bench.
+- An **SSD1306 OLED** (128×64): the controller's three addressing modes, commands that arrive in separate transactions, orientation, contrast, invert, and the charge pump (a sketch that starts it with the wrong voltage option leaves the screen dark, as on a real module). It is drawn from the actual framebuffer, so whatever your sketch draws is what you see.
+- The compile service builds the Adafruit GFX, SSD1306 and BusIO libraries, so real OLED sketches compile unchanged. An I²C scanner example, an OLED example, and two lessons use them.
+
 **Phase 4: guided lessons**
 
-- **Twelve lessons** in two tracks. Circuits: light an LED, voltage and the multimeter, control it with a button, capacitors and time, switch a load with a transistor. Arduino: blink, read a button, read a knob, move a servo, write to an LCD, measure distance with sound, see a signal with the oscilloscope. Each is a short series of steps (58 in all).
+- **Fourteen lessons** in two tracks. Circuits: light an LED, voltage and the multimeter, control it with a button, capacitors and time, switch a load with a transistor. Arduino: blink, read a button, read a knob, move a servo, write to an LCD, measure distance with sound, see a signal with the oscilloscope, find devices on the I²C bus, draw on an OLED. Each is a short series of steps (67 in all).
 - **Goals are checked against what you actually built.** "The resistor sits between the + rail and the LED's anode" is verified from your wiring, "the LED blinked" from the live simulation, and "your sketch calls `digitalWrite`" from the editor. Steps tick off as you go and the lesson moves on when you choose.
 - **Hints, "show me" and explanations.** Every step has a hint, a "Show me" that builds the answer (undoable, and it asks twice), and an explanation of what just happened using your circuit's real numbers.
 - **Parts light up** in the drawer when a step asks for them. Progress is saved in the browser.
@@ -55,7 +61,7 @@ To turn it on, add `OPENAI_API_KEY` in Vercel's environment variables (and optio
 - **Share** makes a link holding your bench and sketch (compressed into the URL, so nothing is stored on a server), or a project file. Anything opened from outside is validated and needs your confirmation first.
 - **Build guide**: a printable shopping list with real part names and resistor colour bands, tick-box placement and wiring in breadboard coordinates, the sketch, and safety checks.
 
-Planned next: OLED and I²C, and ESP32/IoT.
+Planned next: more I²C devices (a temperature sensor, a real-time clock), and ESP32/IoT.
 
 ## Run it
 
@@ -114,4 +120,4 @@ The app deploys to Vercel as-is. Add `COMPILE_SERVICE_URL` and `COMPILE_SERVICE_
 - The oscilloscope samples at 10 kHz, so it shows signals up to a few kilohertz. PWM edges are placed to the nearest 0.1 ms.
 - A device's input is matched to the Uno pin that drives it through wires, breadboard strips and a series resistor of up to 1 kΩ. Through anything else (a transistor, a larger resistor) it is read as a voltage, which is too coarse for fast signals.
 - A relay coil that loses its current path is treated as a destructive voltage spike: the exact voltage is not computed.
-- Libraries available to sketches: Wire, SPI, EEPROM, SoftwareSerial, Servo and LiquidCrystal. Wire and SPI compile, but no I²C or SPI devices exist yet.
+- Libraries available to sketches: Wire, SPI, EEPROM, SoftwareSerial, Servo, LiquidCrystal, and Adafruit GFX, SSD1306 and BusIO. I²C devices work (the OLED); SPI compiles but no SPI devices exist yet. Only one I²C device model exists so far, and the I²C lines are not visible on the oscilloscope.

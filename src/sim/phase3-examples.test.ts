@@ -4,6 +4,7 @@ import { EXAMPLES } from "./examples";
 import { collides, type Doc } from "./model";
 import { PREBUILT } from "./prebuilt.generated";
 import { parseSeries } from "@/components/Plotter";
+import { pixel as pixelOn } from "./ssd1306";
 
 function boot(id: string) {
   const ex = EXAMPLES.find((e) => e.id === id)!;
@@ -184,5 +185,37 @@ describe("serial plotter parsing", () => {
 
   it("ignores a half-printed last line", () => {
     expect(parseSeries("1\n2\n3")[0].values).toEqual([1, 2]);
+  });
+});
+
+describe("I²C examples", () => {
+  it("have clean wiring", () => {
+    for (const id of ["i2cscan", "oledhello"]) {
+      const ex = EXAMPLES.find((e) => e.id === id)!;
+      for (const p of ex.doc.parts) expect(collides(ex.doc, p), `${id}/${p.id}`).toBe(false);
+    }
+  });
+
+  it("i2cscan: finds the display", () => {
+    const t = boot("i2cscan");
+    t.step(1.5);
+    expect(t.serial).toContain("Found a device at 0x3C");
+  });
+
+  it("oledhello: lights the screen and the bar follows the knob", { timeout: 60_000 }, () => {
+    const t = boot("oledhello");
+    const bar = () => {
+      const s = t.step(1);
+      const o = s.parts.oled.oled!;
+      let n = 0;
+      for (let y = 44; y < 56; y++) for (let x = 2; x < 126; x++) if (pixelOn(o, x, y)) n++;
+      return { lit: o.lit, n };
+    };
+    t.prop("pot1", "t", 0.0); // wiper at 5 V: full
+    const full = bar();
+    expect(full.lit).toBe(true);
+    t.prop("pot1", "t", 1.0); // wiper at 0 V: empty
+    const empty = bar();
+    expect(full.n).toBeGreaterThan(empty.n + 1000);
   });
 });

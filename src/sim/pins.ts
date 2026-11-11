@@ -9,4 +9,9 @@ export const DEVICE_SUPPLY: Record<string, { vcc: string; gnd: string }> = {
   servo: { vcc: "vcc", gnd: "gnd" },
   hcsr04: { vcc: "vcc", gnd: "gnd" },
   lcd1602: { vcc: "vdd", gnd: "vss" },
+  oled: { vcc: "vcc", gnd: "gnd" },
 };
+
+/** The Uno's I²C pins in Arduino numbering: SDA is A4 (18) and SCL is A5 (19). */
+export const I2C_SDA = 18;
+export const I2C_SCL = 19;

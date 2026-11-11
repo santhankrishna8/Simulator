@@ -379,4 +379,78 @@ void loop() {
   delay(40);
 }
 `,
+
+  i2cscan: `// I2C scanner: find every device on the bus.
+// I2C uses two wires, SDA (data) and SCL (clock), and every device has an
+// address from 1 to 127. Asking an address and getting an answer (an ACK)
+// means something is there.
+
+#include <Wire.h>
+
+void setup() {
+  Serial.begin(9600);
+  Wire.begin();
+  Serial.println("Scanning the I2C bus...");
+
+  int found = 0;
+  for (byte address = 1; address < 127; address++) {
+    Wire.beginTransmission(address);
+    byte error = Wire.endTransmission();   // 0 means the device answered
+    if (error == 0) {
+      Serial.print("Found a device at 0x");
+      if (address < 16) Serial.print("0");
+      Serial.println(address, HEX);
+      found++;
+    }
+  }
+
+  if (found == 0) {
+    Serial.println("No devices found. Check SDA, SCL and the power.");
+  } else {
+    Serial.println("Done.");
+  }
+}
+
+void loop() {
+}
+`,
+
+  oledhello: `// OLED: draw text and shapes on a 128x64 display over I2C.
+// The Adafruit libraries keep a copy of the screen in memory. You draw into
+// it, then display.display() sends the whole picture to the screen.
+//
+// Note: display.begin() only says whether it found memory for the picture. It
+// cannot tell if the screen is really wired up, so if nothing shows, run the
+// I2C scanner sketch to check the display answers.
+
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+Adafruit_SSD1306 display(128, 64, &Wire, -1);
+
+void setup() {
+  Serial.begin(9600);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {   // 0x3C is the display's address
+    Serial.println("Not enough memory for the display");
+    for (;;) {}                                        // stop here
+  }
+  display.setTextColor(SSD1306_WHITE);
+}
+
+void loop() {
+  int knob = analogRead(A0);
+
+  display.clearDisplay();
+  display.setTextSize(2);
+  display.setCursor(0, 0);
+  display.println("Hello,");
+  display.println("OLED!");
+
+  display.drawRect(0, 42, 128, 16, SSD1306_WHITE);                        // an empty bar
+  display.fillRect(2, 44, map(knob, 0, 1023, 0, 124), 12, SSD1306_WHITE); // filled to the knob
+  display.display();
+  delay(100);
+}
+`,
 };

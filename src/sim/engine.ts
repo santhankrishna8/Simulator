@@ -1,8 +1,9 @@
 import { BATTERIES, HOLE_BY_ID, formatSI } from "./catalog";
-import { Device, HcSr04, Lcd1602, Servo, type DeviceCtx, type DeviceLive } from "./devices";
+import { Device, HcSr04, Lcd1602, Oled, Servo, type DeviceCtx, type DeviceLive } from "./devices";
+import type { I2cSlave } from "./i2c";
 import { CPU_HZ, Mcu, UNO_PIN_IDS, parseHex, type PinMode } from "./mcu";
 import { compile, type Compiled, type Doc, type PinRef, type Runtime, type UnoHandle } from "./model";
-import { DEVICE_SUPPLY } from "./pins";
+import { DEVICE_SUPPLY, I2C_SCL, I2C_SDA } from "./pins";
 import { ScopeBuf, scopeView, type ScopeStats } from "./scope";
 import { bjtCurrents, currentOf, makeState, solve } from "./solver";
 
@@ -149,6 +150,8 @@ export class Engine {
   private byUnoPin = new Map<number, { device: Device; pin: string }[]>();
   /** Uno pins whose input level comes straight from a device's output, not the circuit solver. */
   private directPins = new Set<number>();
+  /** I²C devices on the bus, by address; shared with the chip's bus. */
+  private i2cSlaves = new Map<number, I2cSlave>();
   private devLevel = new Map<string, boolean>();
   /** Last-seen voltages that decide whether the board is powered or in reset. */
   private uV = { v5: 0, vin: 0, reset: 5 };
@@ -199,8 +202,10 @@ export class Engine {
     this.unoInReset = powered && v.v5 > 3 && v.reset < 1;
 
     if (!powered || this.unoInReset) this.mcu = null;
-    else if (!this.mcu && this.program) {
+    else if (!this.mcu && this.program && v.v5 > 3) {
+      // The chip starts once the 5 V rail is up, by which time everything on it has power too.
       this.mcu = new Mcu(this.program);
+      this.mcu.i2c.slaves = this.i2cSlaves;
       this.mcu.onPin = (pin, level) => this.byUnoPin.get(pin)?.forEach((t) => t.device.input(t.pin, level));
       this.devices.forEach((d) => d.onChipReset());
       this.cycleDebt = 0;
@@ -304,7 +309,7 @@ export class Engine {
             }
           },
         };
-        this.devices.set(id, part.type === "servo" ? new Servo(ctx) : part.type === "hcsr04" ? new HcSr04(ctx) : new Lcd1602(ctx));
+        this.devices.set(id, part.type === "servo" ? new Servo(ctx) : part.type === "hcsr04" ? new HcSr04(ctx) : part.type === "oled" ? new Oled(ctx) : new Lcd1602(ctx));
         this.devKinds.set(id, part.type);
       }
       this.devices.get(part.id)!.props = part.props;
@@ -327,6 +332,17 @@ export class Engine {
         this.byUnoPin.set(unoPin, list);
       } else this.directPins.add(unoPin); // an output pin such as ECHO
     });
+
+    for (const [id, dev] of this.devices) {
+      if (dev instanceof Oled) dev.onBus = c.bindings.get(`${id}.sda`) === I2C_SDA && c.bindings.get(`${id}.scl`) === I2C_SCL;
+    }
+    this.refreshI2c();
+  }
+
+  /** I²C devices answer only if SDA and SCL reach the Uno's A4 and A5 and they have power. Checked every step. */
+  private refreshI2c() {
+    this.i2cSlaves.clear();
+    for (const dev of this.devices.values()) if (dev instanceof Oled && dev.onBus && dev.powered) this.i2cSlaves.set(dev.address, dev.slave);
   }
 
   /** Before a solve: set each device's load and output drivers. */
@@ -543,6 +559,7 @@ export class Engine {
         this.scopes.get(sp.id)!.push(this.time, v[a] - v[g], v[b] - v[g]);
       }
       this.senseDevices(c, v, dt);
+      this.refreshI2c();
       if (c.uno) this.senseUno(c.uno, v, dt, c.nodeOf);
 
       if (burnedNow) {
@@ -775,7 +792,8 @@ export class Engine {
         }
         case "servo":
         case "hcsr04":
-        case "lcd1602": {
+        case "lcd1602":
+        case "oled": {
           const dev = this.devices.get(id);
           const sup = DEVICE_SUPPLY[part.type];
           const supply = nv(id, sup.vcc) - nv(id, sup.gnd);
@@ -783,9 +801,16 @@ export class Engine {
           if (dev && !dev.powered) {
             warnings.push({
               id: `nopower-${id}`, level: "info", part: id,
-              title: `${part.type === "servo" ? "Servo" : part.type === "hcsr04" ? "Ultrasonic sensor" : "LCD"} has no power`,
+              title: `${part.type === "servo" ? "Servo" : part.type === "hcsr04" ? "Ultrasonic sensor" : part.type === "oled" ? "OLED" : "LCD"} has no power`,
               why: `It sees ${formatSI(Math.max(0, supply), "V")} across its supply pins and needs ${part.type === "servo" ? "4 to 6" : "about 5"} V. Check that both the power and ground pins are connected.`,
               fix: "Connect the supply pin to 5 V and the ground pin to GND.",
+            });
+          } else if (dev instanceof Oled && !dev.onBus) {
+            warnings.push({
+              id: `i2c-${id}`, level: "info", part: id,
+              title: "The OLED is not on the I²C bus",
+              why: "A sketch can only reach this display through the Uno's I²C pins: SDA must go to A4 and SCL to A5. Right now at least one of them goes somewhere else.",
+              fix: "Wire the display's SDA to A4 and its SCL to A5.",
             });
           } else if (part.type === "lcd1602") {
             const lcd = parts[id].lcd;

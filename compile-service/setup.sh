@@ -11,6 +11,9 @@ ROOT="${1:?usage: setup.sh <install-dir>}"
 CORE_TAG="${CORE_TAG:-1.8.6}"
 SERVO_TAG="${SERVO_TAG:-1.2.2}"
 LCD_TAG="${LCD_TAG:-1.0.7}"
+GFX_TAG="${GFX_TAG:-1.11.9}"
+SSD_TAG="${SSD_TAG:-2.5.9}"
+BUSIO_TAG="${BUSIO_TAG:-1.15.0}"
 CORE_DIR="${CORE_SRC:-}"
 
 mkdir -p "$ROOT"
@@ -31,6 +34,17 @@ if [ -z "$LCD_DIR" ]; then
   git clone --quiet --depth 1 --branch "$LCD_TAG" https://github.com/arduino-libraries/LiquidCrystal.git "$LCD_DIR"
 fi
 
+fetch() { # <env override> <repo> <tag> <name>
+  local given="$1"
+  if [ -n "$given" ]; then echo "$given"; return; fi
+  local dir; dir="$(mktemp -d)/$4"
+  git clone --quiet --depth 1 --branch "$3" "https://github.com/adafruit/$2.git" "$dir"
+  echo "$dir"
+}
+GFX_DIR="$(fetch "${GFX_SRC:-}" Adafruit-GFX-Library "$GFX_TAG" gfx)"
+SSD_DIR="$(fetch "${SSD_SRC:-}" Adafruit_SSD1306 "$SSD_TAG" ssd)"
+BUSIO_DIR="$(fetch "${BUSIO_SRC:-}" Adafruit_BusIO "$BUSIO_TAG" busio)"
+
 rm -rf "$ROOT/cores" "$ROOT/variants" "$ROOT/libraries" "$ROOT/build"
 mkdir -p "$ROOT/cores" "$ROOT/variants" "$ROOT/libraries" "$ROOT/build"
 cp -r "$CORE_DIR/cores/arduino" "$ROOT/cores/arduino"
@@ -40,6 +54,10 @@ cp -r "$SERVO_DIR" "$ROOT/libraries/Servo"
 rm -rf "$ROOT/libraries/Servo/.git"
 cp -r "$LCD_DIR" "$ROOT/libraries/LiquidCrystal"
 rm -rf "$ROOT/libraries/LiquidCrystal/.git"
+cp -r "$GFX_DIR" "$ROOT/libraries/Adafruit_GFX"
+cp -r "$SSD_DIR" "$ROOT/libraries/Adafruit_SSD1306"
+cp -r "$BUSIO_DIR" "$ROOT/libraries/Adafruit_BusIO"
+rm -rf "$ROOT"/libraries/Adafruit_*/.git "$ROOT"/libraries/Adafruit_*/examples
 
 MCU=atmega328p
 COMMON="-mmcu=$MCU -DF_CPU=16000000L -DARDUINO=10819 -DARDUINO_AVR_UNO -DARDUINO_ARCH_AVR -I$ROOT/cores/arduino -I$ROOT/variants/standard"
@@ -67,11 +85,11 @@ build_dir() { # <src dir> <out archive> <extra include>
 
 echo "building core"
 build_dir "$ROOT/cores/arduino" "$ROOT/build/core.a"
-for lib in Wire SPI EEPROM SoftwareSerial Servo LiquidCrystal; do
+for lib in Wire SPI EEPROM SoftwareSerial Servo LiquidCrystal Adafruit_BusIO Adafruit_GFX Adafruit_SSD1306; do
   echo "building $lib"
   src="$ROOT/libraries/$lib/src"
   [ -d "$src" ] || src="$ROOT/libraries/$lib"
-  inc="-I$src"
+  inc="-I$src -I$ROOT/libraries/Wire/src -I$ROOT/libraries/Wire/src/utility -I$ROOT/libraries/SPI/src -I$ROOT/libraries/Adafruit_BusIO -I$ROOT/libraries/Adafruit_GFX"
   # Wire needs its utility folder.
   [ -d "$src/utility" ] && inc="$inc -I$src/utility"
   [ -d "$src/avr" ] && inc="$inc -I$src/avr"

@@ -374,7 +374,8 @@ export function compile(doc: Doc, rt: Runtime): Compiled {
       }
       case "servo":
       case "hcsr04":
-      case "lcd1602": {
+      case "lcd1602":
+      case "oled": {
         const sup = DEVICE_SUPPLY[p.type];
         const handle: DeviceHandle = { drivers: new Map(), vcc: N(id, sup.vcc), gnd: N(id, sup.gnd) };
         const load: Extract<Elem, { k: "R" }> = { k: "R", a: handle.vcc, b: handle.gnd, r: 500, part: id, tag: "load" };

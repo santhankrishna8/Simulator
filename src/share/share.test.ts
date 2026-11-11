@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { LESSONS, solutionChain } from "@/lessons";
+import { CATALOG } from "@/sim/catalog";
 import { EXAMPLES } from "@/sim/examples";
 import { decodeProject, encodeProject, projectFile, readProjectFile } from "./codec";
 import { LIMITS, sanitizeProject, type Project } from "./sanitize";
@@ -21,7 +22,8 @@ describe("share links", () => {
       expect(back.project.doc.parts.map((x) => [x.id, x.type, x.x, x.y, x.rot])).toEqual(p.doc.parts.map((x) => [x.id, x.type, x.x, x.y, x.rot]));
       expect(back.project.doc.wires.map((w) => [w.id, w.a, w.b, w.color])).toEqual(p.doc.wires.map((w) => [w.id, w.a, w.b, w.color]));
       expect(back.project.code).toBe(p.code);
-      for (const part of p.doc.parts) expect(back.project.doc.parts.find((x) => x.id === part.id)!.props).toEqual(part.props);
+      // A part left without settings comes back with its defaults filled in, which is what we want.
+      for (const part of p.doc.parts) expect(back.project.doc.parts.find((x) => x.id === part.id)!.props).toEqual({ ...CATALOG[part.type].defaults, ...part.props });
     }
   });
 

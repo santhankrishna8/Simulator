@@ -1,3 +1,4 @@
+import { pixel } from "@/sim/ssd1306";
 import { SKETCHES } from "@/sim/sketches.mjs";
 import { add, BLACK, BLUE, breadboard, doc, GREEN, hole, ORANGE, part, pin, RED, wire, YELLOW } from "../author";
 import { anyLit, built, codeHas, joined, noTrouble, partsOf, placed, prop, running, seated, seen, seriesResistor, serialHas, serialNumbers, shape, stripComments, transitions } from "../goals";
@@ -722,6 +723,7 @@ const scopeLesson: Lesson = {
   minutes: 15,
   summary: "Probe a PWM signal and its filtered result, and read frequency and duty cycle off the screen.",
   start: scopeStart(),
+  next: "i2c",
   steps: [
     {
       title: "Put a scope on the bench",
@@ -813,4 +815,261 @@ const scopeLesson: Lesson = {
   ],
 };
 
-export const arduinoLessons: Lesson[] = [blink, buttonInput, knob, servo, lcdLesson, ultrasonic, scopeLesson];
+
+/* ------------------------------------------------------------------ */
+
+const TEMPLATE_I2C = `// Scan the I2C bus and list every device that answers.
+
+void setup() {
+}
+
+void loop() {
+}
+`;
+
+const oledWires = () => [
+  wire(pin("oled", "gnd"), pin("uno", "gnd2"), BLACK),
+  wire(pin("oled", "vcc"), pin("uno", "5v"), RED),
+  wire(pin("oled", "scl"), pin("uno", "a5"), YELLOW),
+  wire(pin("oled", "sda"), pin("uno", "a4"), GREEN),
+];
+
+const i2cLesson: Lesson = {
+  id: "i2c",
+  title: "Find devices on the I²C bus",
+  track: "arduino",
+  level: "Intermediate",
+  minutes: 12,
+  summary: "Wire a display to the two I²C pins and write a scanner that finds it by its address.",
+  start: { doc: doc([uno(-30, 2)]), code: TEMPLATE_I2C },
+  next: "oled",
+  steps: [
+    {
+      title: "Power a display",
+      body: [
+        "**I²C** (say \"I-squared-C\") lets one microcontroller talk to many chips over just **two wires**. Every chip on the bus has a **7-bit address**, a number from 1 to 127, and only answers when it hears its own.",
+        "Place an **OLED display** on the bench and give it power: connect **VCC** to **5V** and **GND** to a **GND** socket.",
+      ].join("\n\n"),
+      goals: [
+        placed("oled", "An OLED display is on the bench"),
+        joined("VCC reaches 5V", { type: "oled", pin: "vcc" }, UNO("5v")),
+        joined("GND reaches GND", { type: "oled", pin: "gnd" }, GND),
+      ],
+      spotlight: ["oled"],
+      hint: "Hover the display's four pins to read their names: GND, VCC, SCL, SDA. 5V and GND are on the bottom edge of the Uno.",
+      after: "The display is powered, but the Uno cannot talk to it yet: that needs the two data wires.",
+      solution: (prev) => ({
+        ...prev,
+        doc: add(prev.doc, [part("oled", "oled", 8, 8)], [wire(pin("oled", "gnd"), pin("uno", "gnd2"), BLACK), wire(pin("oled", "vcc"), pin("uno", "5v"), RED)]),
+      }),
+    },
+    {
+      title: "Wire the two bus lines",
+      body: [
+        "The bus is **SDA** (data) and **SCL** (clock). On an Uno they are not free to choose: the hardware I²C pins are **A4 for SDA** and **A5 for SCL**.",
+        "Connect the display's **SDA** to **A4**, and its **SCL** to **A5**.",
+      ].join("\n\n"),
+      goals: [
+        joined("SDA reaches A4", { type: "oled", pin: "sda" }, UNO("a4")),
+        joined("SCL reaches A5", { type: "oled", pin: "scl" }, UNO("a5")),
+      ],
+      hint: "A4 and A5 are the last two sockets in the group of six on the bottom right of the Uno (they are also marked SDA and SCL at the top).",
+      after: "Many chips can share these same two wires, each with its own address. That is why I²C is popular: sensors, displays and memory chips all on one pair.",
+      solution: (prev) => ({ ...prev, doc: add(prev.doc, [], [wire(pin("oled", "scl"), pin("uno", "a5"), YELLOW), wire(pin("oled", "sda"), pin("uno", "a4"), GREEN)]) }),
+    },
+    {
+      title: "Write the scanner",
+      body: [
+        "To check if an address answers, start a transmission to it and see if it **acknowledges** (ACK). In code:",
+        "- `Wire.begin();` in `setup()` starts the bus.",
+        "- `Wire.beginTransmission(address);` then `Wire.endTransmission();` asks that address. It returns **0** if a device answered.",
+        "Loop `address` from 1 to 126, and `Serial.print` each one that answers.",
+      ].join("\n"),
+      goals: [
+        codeHas("The Wire library is included", /#include\s*<Wire\.h>/),
+        codeHas("Wire.begin() starts the bus", /Wire\.begin\s*\(\s*\)/),
+        codeHas("beginTransmission and endTransmission ask an address", /beginTransmission\s*\([\s\S]*endTransmission\s*\(/),
+        codeHas("It prints what it finds", /Serial\.print(ln)?\s*\(/),
+      ],
+      hint: "for (byte address = 1; address < 127; address++) { Wire.beginTransmission(address); if (Wire.endTransmission() == 0) { ...print it... } } Show me gives the whole sketch.",
+      after: "endTransmission returns 0 for an ACK, and 2 if nobody answered the address. That is all a bus scanner is.",
+      solution: (prev) => ({ ...prev, code: SKETCHES.i2cscan }),
+    },
+    {
+      title: "Run the scan",
+      body: "Upload and run, then open the **Serial monitor**. It should report one device at **0x3C**: that is the display's address, written in hexadecimal.",
+      goals: [built, running, serialHas("The scan found a device at 0x3C", /Found a device at 0x3C/)],
+      hint: "Open the Serial monitor tab to read the result. If it finds nothing, check the SDA and SCL wires.",
+      after: "0x3C is 60 in everyday numbers. Most small OLEDs answer there; some use 0x3D, which you can choose in the display's settings.",
+      solution: (prev) => prev,
+      demo: (d) => d.run(1.5),
+    },
+    {
+      title: "Break the bus",
+      body: [
+        "See what a missing wire looks like. Select the wire going to the display's **SDA** pin and press **Delete**. Then press **Reset**, and **Run** again.",
+        "The scan should now report that it found nothing. When an I²C device is \"not detected\", this is the first test to run: wiring faults and missing power both look like this.",
+      ].join("\n\n"),
+      goals: [
+        shape("The SDA wire is gone", (c) => !c.nets.resolve({ type: "oled", pin: "sda" }).some((x) => c.nets.resolve(UNO("a4")).some((y) => y.net === x.net))),
+        serialHas("The scan found nothing", /No devices found/),
+      ],
+      hint: "Click the wire from the display's SDA pin to select it, press Delete, then press Reset and Run.",
+      after: "Now you know how to diagnose an I²C device that will not show up: run the scanner, and if the address is missing, check power, then SDA and SCL.",
+      solution: (prev) => ({ ...prev, doc: { ...prev.doc, wires: prev.doc.wires.filter((w) => !(w.a.part === "oled" && w.a.pin === "sda")) } }),
+      demo: (d) => d.run(1.5),
+    },
+  ],
+  takeaways: [
+    "I²C uses two wires, SDA and SCL, shared by many devices.",
+    "On an Uno, SDA is A4 and SCL is A5.",
+    "Each device has an address; endTransmission() returning 0 means it answered.",
+    "A scanner is the first thing to run when an I²C device does not respond.",
+  ],
+};
+
+/* ------------------------------------------------------------------ */
+
+const TEMPLATE_OLED = `// Draw text and a bar on a 128x64 OLED.
+
+void setup() {
+}
+
+void loop() {
+}
+`;
+
+const OLED_BEGIN = `#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+Adafruit_SSD1306 display(128, 64, &Wire, -1);
+
+void setup() {
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  display.setTextColor(SSD1306_WHITE);
+}
+
+void loop() {
+}
+`;
+
+const oledOf = (c: Ctx) => {
+  const d = partsOf(c, "oled")[0];
+  return d ? c.snap?.parts[d.id]?.oled : undefined;
+};
+const barPixels = (c: Ctx) => {
+  const o = oledOf(c);
+  if (!o) return -1;
+  let n = 0;
+  for (let y = 44; y < 56; y++) for (let x = 2; x < 126; x++) if (pixel(o, x, y)) n++;
+  return n;
+};
+const textPixels = (c: Ctx) => {
+  const o = oledOf(c);
+  if (!o) return 0;
+  let n = 0;
+  for (let y = 0; y < 32; y++) for (let x = 0; x < 80; x++) if (pixel(o, x, y)) n++;
+  return n;
+};
+
+const oledLesson: Lesson = {
+  id: "oled",
+  title: "Draw on an OLED screen",
+  track: "arduino",
+  level: "Intermediate",
+  minutes: 18,
+  summary: "Use the Adafruit libraries to put text and a knob-controlled bar on a 128×64 display.",
+  start: { doc: doc([uno(-30, 2), part("oled", "oled", 8, 8)], oledWires()), code: TEMPLATE_OLED },
+  steps: [
+    {
+      title: "Add a knob",
+      body: [
+        "The display is already wired to the I²C pins. To give the sketch something live to show, add a **potentiometer** and read it on **A0**.",
+        "Connect one outer leg to **5V**, the other to **GND**, and the middle leg to **A0**.",
+      ].join("\n\n"),
+      goals: [
+        shape("The potentiometer has 5V and GND on its outer legs", (c) => {
+          const has = (a: PinSpec, b: PinSpec) => c.nets.resolve(a).some((x) => c.nets.resolve(b).some((y) => x.net === y.net && x.partId !== y.partId));
+          const a: PinSpec = { type: "pot", pin: "a" }, b: PinSpec = { type: "pot", pin: "b" };
+          return (has(a, UNO("5v")) && has(b, GND)) || (has(a, GND) && has(b, UNO("5v")));
+        }),
+        joined("The wiper reaches A0", { type: "pot", pin: "w" }, UNO("a0")),
+      ],
+      spotlight: ["pot"],
+      hint: "Place the potentiometer anywhere on the bench, then wire its three legs: outer legs to 5V and GND, middle leg to A0.",
+      after: "Same as the knob lesson: the wiper makes a voltage between 0 and 5 V that analogRead turns into 0 to 1023.",
+      solution: (prev) => ({
+        ...prev,
+        doc: add(prev.doc, [part("pot1", "pot", 20, 20, { ohms: 10000, t: 0.4 })], [
+          wire(pin("pot1", "a"), pin("uno", "5v"), RED), wire(pin("pot1", "b"), pin("uno", "gnd3"), BLACK), wire(pin("pot1", "w"), pin("uno", "a0"), BLUE),
+        ]),
+      }),
+    },
+    {
+      title: "Start the display",
+      body: [
+        "Two libraries do the hard work. **Adafruit_GFX** knows how to draw text, lines and shapes. **Adafruit_SSD1306** knows how to send them to this particular chip. Include both, plus `Wire.h`.",
+        "Create the display object with its size and the bus: `Adafruit_SSD1306 display(128, 64, &Wire, -1);`",
+        "In `setup()`, start it with `display.begin(SSD1306_SWITCHCAPVCC, 0x3C);` and set the text colour with `display.setTextColor(SSD1306_WHITE);`.",
+      ].join("\n\n"),
+      goals: [
+        codeHas("Adafruit_GFX and Adafruit_SSD1306 are included", /#include\s*<Adafruit_GFX\.h>[\s\S]*#include\s*<Adafruit_SSD1306\.h>|#include\s*<Adafruit_SSD1306\.h>[\s\S]*#include\s*<Adafruit_GFX\.h>/),
+        codeHas("A 128 × 64 display object is created", /Adafruit_SSD1306\s+\w+\s*\(\s*128\s*,\s*64/),
+        codeHas("begin() uses SSD1306_SWITCHCAPVCC and address 0x3C", /\.begin\s*\(\s*SSD1306_SWITCHCAPVCC\s*,\s*0x3[cC]\s*\)/),
+      ],
+      hint: "SWITCHCAPVCC tells the library to use the display's own voltage pump. With the other choice, a typical module stays dark. Show me gives a starting sketch.",
+      after: "begin() sends the display its start-up commands over I²C. SWITCHCAPVCC turns on the charge pump that raises the voltage the pixels need: a typical module has no other way to light.",
+      solution: (prev) => ({ ...prev, code: OLED_BEGIN }),
+    },
+    {
+      title: "Draw and send",
+      body: [
+        "Drawing happens in the Uno's memory first. In `loop()`:",
+        "- `display.clearDisplay();` wipes the picture.",
+        "- `display.setTextSize(2); display.setCursor(0, 0); display.println(\"Hello,\");` draws text.",
+        "- `display.drawRect(0, 42, 128, 16, SSD1306_WHITE);` draws a box, and `display.fillRect(...)` fills one.",
+        "- **`display.display();`** sends the picture to the screen. Nothing appears until you call it.",
+        "Read the knob with `analogRead(A0)` and use `map(knob, 0, 1023, 0, 124)` as the width of the filled bar.",
+      ].join("\n"),
+      goals: [
+        codeHas("clearDisplay wipes the picture", /\.clearDisplay\s*\(\s*\)/),
+        codeHas("Text is drawn with print or println", /\.print(ln)?\s*\(/),
+        codeHas("The knob is read with analogRead", /analogRead\s*\(/),
+        codeHas("display() sends the picture", /\.display\s*\(\s*\)/),
+      ],
+      hint: "The order matters: clear, draw things, then display(). Show me gives the finished sketch.",
+      after: "The library keeps a 1,024-byte copy of the screen: 128 columns by 8 pages of 8 pixels. display() sends all of it over the bus, which takes about a tenth of a second.",
+      solution: (prev) => ({ ...prev, code: SKETCHES.oledhello }),
+    },
+    {
+      title: "See it work",
+      body: "Upload and run. The text should appear at the top left, with a bar below it. Turn the potentiometer with its **Knob position** slider and watch the bar grow and shrink.",
+      goals: [
+        built,
+        running,
+        seen("The screen lit up", (c) => !!oledOf(c)?.lit),
+        seen("Text appeared at the top left", (c) => textPixels(c) > 150),
+        seen("The bar was nearly empty", (c) => barPixels(c) >= 0 && barPixels(c) < 40),
+        seen("The bar was nearly full", (c) => barPixels(c) > 1000),
+      ],
+      hint: "Select the potentiometer and drag its slider all the way one way, then the other. The screen redraws about ten times a second.",
+      after: "You drew a picture in memory, sent it over two wires, and a chip turned it into light. Every OLED and graphic LCD works this way.",
+      solution: (prev) => prev,
+      demo: (d) => {
+        d.setProp("pot", "t", 1.0);
+        d.run(1.2);
+        d.setProp("pot", "t", 0.0);
+        d.run(1.2);
+      },
+    },
+  ],
+  takeaways: [
+    "Two libraries split the work: GFX draws, SSD1306 talks to the chip.",
+    "You draw into memory, and display() sends the picture to the screen.",
+    "begin(SSD1306_SWITCHCAPVCC, address) starts the display and its charge pump.",
+    "begin() cannot tell if the display is really connected: use an I²C scanner to check.",
+  ],
+};
+
+export const arduinoLessons: Lesson[] = [blink, buttonInput, knob, servo, lcdLesson, ultrasonic, scopeLesson, i2cLesson, oledLesson];

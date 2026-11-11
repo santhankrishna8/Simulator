@@ -14,6 +14,7 @@ export type PartType =
   | "hcsr04"
   | "lcd1602"
   | "scope"
+  | "oled"
   | "battery9v"
   | "batteryAA2"
   | "batteryAA4"
@@ -396,6 +397,29 @@ const defs: PartDef[] = [
       what: "A scope draws how a voltage changes over time. A multimeter gives one number; a scope shows the whole shape, so you can see a PWM square wave, a capacitor charging or a button bouncing.",
       wiring: "Touch a probe to the node you want to see, and clip the ground clip to GND. The screen is 10 divisions wide and 8 tall: pick the time per division so a few cycles fit, and volts per division so the wave fills the screen.",
       limits: "It samples every 0.1 ms (10 kHz), so it shows signals up to a few kilohertz. The trigger holds a repeating wave still by starting each sweep when CH1 rises through the trigger level.",
+    },
+  },
+  {
+    type: "oled",
+    name: "OLED display",
+    category: "Output",
+    blurb: "128×64 pixels, I²C (SSD1306)",
+    pins: [
+      { id: "gnd", x: 0, y: 0, label: "GND" },
+      { id: "vcc", x: 1, y: 0, label: "VCC (3.3 to 5 V)" },
+      { id: "scl", x: 2, y: 0, label: "SCL (clock)" },
+      { id: "sda", x: 3, y: 0, label: "SDA (data)" },
+    ],
+    box: { x: -3.8, y: -0.8, w: 10.6, h: 11.6 },
+    defaults: { address: "0x3C", color: "white" },
+    props: [
+      { key: "address", label: "I²C address", kind: "choice", options: [{ value: "0x3C", label: "0x3C" }, { value: "0x3D", label: "0x3D" }] },
+      { key: "color", label: "Pixel colour", kind: "choice", options: [{ value: "white", label: "White" }, { value: "blue", label: "Blue" }, { value: "yellowblue", label: "Yellow and blue" }] },
+    ],
+    learn: {
+      what: "A small screen of 128 by 64 pixels that makes its own light, so it has no backlight and is very easy to read. The SSD1306 chip behind it keeps a picture in memory and lights the pixels that are set.",
+      wiring: "Four wires: GND to GND, VCC to 5V, SCL to A5 and SDA to A4. Those two pins are the Uno's I²C bus. In a sketch, use the Adafruit_SSD1306 and Adafruit_GFX libraries: display.begin(SSD1306_SWITCHCAPVCC, 0x3C), draw, then display.display().",
+      limits: "It only talks I²C at its address (0x3C, or 0x3D with the solder jumper moved). If a sketch says \"OLED not found\", check SDA and SCL and the power. The library must use SWITCHCAPVCC on a typical module, or the screen stays dark.",
     },
   },
   {

@@ -3,6 +3,7 @@
  * wiring: it tells the chip what voltage each input pin sees, and asks what
  * each output pin is driving.
  */
+import { I2cBus } from "./i2c";
 import {
   AVRADC, AVRIOPort, AVRSPI, AVRTimer, AVRTWI, AVRUSART, CPU, PinState,
   adcConfig, avrInstruction, portBConfig, portCConfig, portDConfig,
@@ -49,6 +50,8 @@ export class Mcu {
   readonly cpu: CPU;
   readonly usart: AVRUSART;
   readonly adc: AVRADC;
+  /** The I²C bus on A4 (SDA) and A5 (SCL); the engine puts devices on it. */
+  readonly i2c: I2cBus;
   private readonly ports: Record<"B" | "C" | "D", AVRIOPort>;
   private readonly tx: number[] = [];
   private readonly rxQueue: number[] = [];
@@ -88,7 +91,9 @@ export class Mcu {
     new AVRTimer(this.cpu, timer1Config);
     new AVRTimer(this.cpu, timer2Config);
     new AVRSPI(this.cpu, spiConfig, CPU_HZ);
-    new AVRTWI(this.cpu, twiConfig, CPU_HZ);
+    const twi = new AVRTWI(this.cpu, twiConfig, CPU_HZ);
+    this.i2c = new I2cBus(twi, (cycles, fn) => this.schedule(cycles, fn), CPU_HZ);
+    twi.eventHandler = this.i2c;
     this.usart = new AVRUSART(this.cpu, usart0Config, CPU_HZ);
     this.usart.onByteTransmit = (b) => {
       this.tx.push(b);

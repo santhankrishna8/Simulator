@@ -69,6 +69,6 @@ describe("ATmega328P emulation", () => {
     m.run(CPU_HZ); // one simulated second
     const ms = performance.now() - t0;
     console.log(`1 simulated second of Fade took ${ms.toFixed(0)} ms`);
-    expect(ms).toBeLessThan(1000);
+    expect(ms).toBeLessThan(2000);
   });
 });

@@ -20,7 +20,31 @@ const LIBRARIES = {
   "SoftwareSerial.h": "SoftwareSerial",
   "Servo.h": "Servo",
   "LiquidCrystal.h": "LiquidCrystal",
+  "Adafruit_SSD1306.h": "Adafruit_SSD1306",
+  "Adafruit_GFX.h": "Adafruit_GFX",
+  "gfxfont.h": "Adafruit_GFX",
+  "Adafruit_I2CDevice.h": "Adafruit_BusIO",
+  "Adafruit_SPIDevice.h": "Adafruit_BusIO",
+  "Adafruit_BusIO_Register.h": "Adafruit_BusIO",
 };
+
+// Libraries that use others: including one brings the rest.
+const DEPENDS = {
+  Adafruit_SSD1306: ["Adafruit_GFX", "Wire", "SPI"],
+  Adafruit_GFX: ["Adafruit_BusIO", "Wire", "SPI"],
+  Adafruit_BusIO: ["Wire", "SPI"],
+};
+
+function withDependencies(libs) {
+  const all = new Set();
+  const visit = (l) => {
+    if (all.has(l)) return;
+    all.add(l);
+    for (const d of DEPENDS[l] ?? []) visit(d);
+  };
+  libs.forEach(visit);
+  return [...all];
+}
 
 const MCU = "atmega328p";
 const COMMON = [
@@ -173,7 +197,7 @@ export async function compile(source) {
   await mkdir(dir, { recursive: true });
   try {
     await writeFile(path.join(dir, "sketch.cpp"), prepare(source));
-    const libs = [...new Set([...source.matchAll(/#\s*include\s*<([^>]+)>/g)].map((m) => LIBRARIES[m[1]]).filter(Boolean))];
+    const libs = withDependencies([...new Set([...source.matchAll(/#\s*include\s*<([^>]+)>/g)].map((m) => LIBRARIES[m[1]]).filter(Boolean))]);
     // Wire pulls in nothing else, but libraries may include one another.
     const incs = libs.flatMap((l) => {
       const base = existsSync(path.join(ROOT, "libraries", l, "src")) ? path.join(ROOT, "libraries", l, "src") : path.join(ROOT, "libraries", l);
@@ -187,7 +211,8 @@ export async function compile(source) {
     }
 
     const archives = [...libs.map((l) => path.join(ROOT, "build", `lib-${l}.a`)), path.join(ROOT, "build", "core.a")];
-    const ld = await run("avr-gcc", ["-w", "-Os", "-Wl,--gc-sections", `-mmcu=${MCU}`, "-o", "sketch.elf", "sketch.o", ...archives, "-lm"], dir, deadline);
+    // A group lets libraries that use each other resolve in any order.
+    const ld = await run("avr-gcc", ["-w", "-Os", "-Wl,--gc-sections", `-mmcu=${MCU}`, "-o", "sketch.elf", "sketch.o", "-Wl,--start-group", ...archives, "-Wl,--end-group", "-lm"], dir, deadline);
     if (ld.code !== 0) {
       const undefinedRef = /undefined reference to `([^']+)'/.exec(ld.out);
       if (/region `(data|text)' overflowed|not within region `(data|text)'/.test(ld.out)) {

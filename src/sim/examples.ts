@@ -347,5 +347,22 @@ function deviceExamples(): Example[] {
     [w(pin("pot1", "a"), U("5v"), RED), w(pin("pot1", "b"), U("gnd2"), BLACK), w(pin("pot1", "w"), U("a0"), BLUE)],
   );
 
-  return [rgb, sevenseg, servo, servoKnob, ultrasonic, lcdhello, pwmscope, plotter];
+  const oledWires = [
+    w(pin("oled", "gnd"), U("gnd2"), BLACK), w(pin("oled", "vcc"), U("5v"), RED),
+    w(pin("oled", "scl"), U("a5"), YELLOW), w(pin("oled", "sda"), U("a4"), GREEN2),
+  ];
+  const i2cscan = make(
+    "i2cscan", "I²C scanner",
+    "Ask every address on the I²C bus who is there. The OLED answers at 0x3C.",
+    [uno(-30, 2), p("oled", "oled", 8, 8)],
+    oledWires,
+  );
+  const oledhello = make(
+    "oledhello", "OLED display",
+    "A 128×64 screen on two wires. The sketch draws text and a bar that follows the knob.",
+    [uno(-30, 2), p("oled", "oled", 8, 8), p("pot1", "pot", 20, 20, { ohms: 10000, t: 0.4 })],
+    [...oledWires, w(pin("pot1", "a"), U("5v"), RED), w(pin("pot1", "b"), U("gnd3"), BLACK), w(pin("pot1", "w"), U("a0"), BLUE)],
+  );
+
+  return [rgb, sevenseg, servo, servoKnob, ultrasonic, lcdhello, pwmscope, plotter, i2cscan, oledhello];
 }

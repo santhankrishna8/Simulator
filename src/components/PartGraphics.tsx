@@ -4,6 +4,7 @@ import { memo } from "react";
 import { BB_COLS, BB_H, BB_W, HOLES, LED_COLORS, ROW_LETTERS, formatSI, resistorBands } from "@/sim/catalog";
 import type { PartLive } from "@/sim/engine";
 import { glyph } from "@/sim/lcdfont";
+import { OLED_H, OLED_W, pixel } from "@/sim/ssd1306";
 import type { Part } from "@/sim/model";
 import { useStore } from "@/store";
 
@@ -931,6 +932,63 @@ function Scope({ part, live }: GProps) {
   );
 }
 
+
+/* ---------- OLED (SSD1306) ---------- */
+
+const OLED_COLORS: Record<string, [string, string]> = {
+  white: ["#eaf1ff", "#eaf1ff"],
+  blue: ["#7cc4ff", "#7cc4ff"],
+  yellowblue: ["#ffe66d", "#7cc4ff"], // many modules are yellow in the top 16 rows
+};
+
+/** Lit pixels as runs along each row, so a screenful of text is a few hundred small shapes. */
+function oledRuns(o: NonNullable<GProps["live"]>["oled"] & object, fromRow: number, toRow: number): string {
+  let d = "";
+  for (let y = fromRow; y < toRow; y++) {
+    let x = 0;
+    while (x < OLED_W) {
+      if (!pixel(o, x, y)) { x++; continue; }
+      let end = x;
+      while (end < OLED_W && pixel(o, end, y)) end++;
+      d += `M${x} ${y}h${end - x}v1h-${end - x}z`;
+      x = end;
+    }
+  }
+  return d;
+}
+
+function OledGfx({ part, live }: GProps) {
+  const o = live?.oled;
+  const [top, bottom] = OLED_COLORS[String(part.props.color)] ?? OLED_COLORS.white;
+  const split = String(part.props.color) === "yellowblue" ? 16 : 0;
+  const lit = !!o?.lit;
+  const bright = o ? 0.35 + (o.contrast / 255) * 0.65 : 1;
+  const scale = 0.62;
+  return (
+    <g>
+      {[0, 10, 20, 30].map((x) => <Lead key={x} d={`M${x} 0 V9`} />)}
+      <rect x={-38} y={8} width={106} height={102} rx={4} fill="#0f1c2b" />
+      <rect x={-38} y={8} width={106} height={102} rx={4} fill="url(#g-shade-v)" opacity={0.4} />
+      {[[-32, 14], [62, 14], [-32, 104], [62, 104]].map(([x, y]) => <circle key={`${x}${y}`} cx={x} cy={y} r={2.8} fill="#cdd6df" />)}
+      <g fontSize={4} fill="#9db3c9" textAnchor="middle" fontFamily="var(--font-mono)">
+        {["GND", "VCC", "SCL", "SDA"].map((t, i) => <text key={t} x={i * 10} y={20}>{t}</text>)}
+      </g>
+      <rect x={-31} y={28} width={92} height={56} rx={2} fill="#020305" />
+      <rect x={-31} y={28} width={92} height={56} rx={2} fill="none" stroke="#1d2a38" strokeWidth={0.8} />
+      <g transform={`translate(${15 - (OLED_W * scale) / 2} ${56 - (OLED_H * scale) / 2}) scale(${scale})`}>
+        {lit && o && (
+          <>
+            {split > 0 && <path d={oledRuns(o, 0, split)} fill={top} opacity={bright} />}
+            <path d={oledRuns(o, split, OLED_H)} fill={bottom} opacity={bright} />
+          </>
+        )}
+      </g>
+      {!lit && <text x={15} y={58} fontSize={5} textAnchor="middle" fill="#2b3a4a" fontFamily="var(--font-mono)">{o ? "OFF" : ""}</text>}
+      <text x={15} y={98} fontSize={5} textAnchor="middle" fill="#9db3c9" fontFamily="var(--font-mono)">{'0.96" 128×64 · I²C'}</text>
+    </g>
+  );
+}
+
 /* ---------- Dispatcher ---------- */
 
 interface GProps {
@@ -950,6 +1008,7 @@ export function PartGraphic({ part, live }: GProps) {
     case "hcsr04": return <Ultrasonic />;
     case "lcd1602": return <Lcd part={part} live={live} />;
     case "scope": return <Scope part={part} live={live} />;
+    case "oled": return <OledGfx part={part} live={live} />;
     case "battery9v": return <Battery9V />;
     case "batteryAA2": return <AAHolder cells={2} />;
     case "batteryAA4": return <AAHolder cells={4} />;

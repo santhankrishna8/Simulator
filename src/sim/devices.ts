@@ -4,6 +4,8 @@
  * The circuit solver only moves in 0.2 ms steps, far too coarse for a 10 µs trigger pulse.
  */
 import { Hd44780, type LcdLive } from "./hd44780";
+import type { I2cSlave } from "./i2c";
+import { Ssd1306, type OledLive } from "./ssd1306";
 import { CPU_HZ } from "./mcu";
 
 export type { LcdLive };
@@ -12,6 +14,7 @@ export interface DeviceLive {
   /** Servo horn angle in degrees. */
   deg?: number;
   lcd?: LcdLive & { contrast: number; backlight: number };
+  oled?: OledLive;
   extra?: Record<string, string>;
 }
 
@@ -234,6 +237,46 @@ export class Lcd1602 extends Device {
         Display: !this.powered ? "No power" : lcd.blocks ? "Not initialised" : lcd.on ? "On" : "Off",
         Contrast: !this.powered ? "–" : this.tooDark ? "Too dark (V0 near 0 V)" : this.contrast < 0.15 ? "Too faint (V0 too high)" : "Readable",
         Backlight: this.backlight > 0.05 ? "On" : "Off",
+      },
+    };
+  }
+}
+
+/* ---------- 128x64 OLED (SSD1306, I²C) ---------- */
+
+export class Oled extends Device {
+  readonly inputs = [] as const;
+  chip = new Ssd1306();
+  /** SDA and SCL are wired to the Uno's A4 and A5. Set by the engine. */
+  onBus = false;
+
+  get address(): number {
+    return parseInt(String(this.props.address ?? "0x3C"), 16) || 0x3c;
+  }
+
+  get slave(): I2cSlave {
+    return this.chip;
+  }
+
+  step(env: DeviceEnv) {
+    const was = this.powered;
+    this.powered = env.vcc >= 3.0;
+    if (was && !this.powered) this.chip = new Ssd1306(); // losing power wipes the picture
+  }
+
+  load() {
+    return this.chip.lit ? 250 : 5000; // about 20 mA lit, 1 mA idle
+  }
+
+  live(): DeviceLive {
+    const snap = this.chip.snapshot();
+    return {
+      oled: { ...snap, lit: snap.lit && this.powered },
+      extra: {
+        Display: !this.powered ? "No power" : !this.onBus ? "Not on the I²C bus" : snap.lit ? "On" : snap.displayOn && !snap.pumpOn ? "Dark: charge pump is off" : "Off (waiting for the sketch)",
+        "I²C address": `0x${this.address.toString(16).toUpperCase()}`,
+        Bus: this.onBus ? "SDA to A4, SCL to A5" : "SDA and SCL are not wired to A4 and A5",
+        Contrast: `${Math.round((snap.contrast / 255) * 100)} %`,
       },
     };
   }
