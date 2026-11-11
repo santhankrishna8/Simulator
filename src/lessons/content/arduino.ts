@@ -1,6 +1,6 @@
 import { SKETCHES } from "@/sim/sketches.mjs";
-import { add, BLACK, BLUE, breadboard, doc, hole, ORANGE, part, pin, RED, wire } from "../author";
-import { anyLit, built, codeHas, joined, noTrouble, placed, prop, running, seated, seen, seriesResistor, serialHas, serialNumbers, shape, stripComments, transitions } from "../goals";
+import { add, BLACK, BLUE, breadboard, doc, GREEN, hole, ORANGE, part, pin, RED, wire, YELLOW } from "../author";
+import { anyLit, built, codeHas, joined, noTrouble, partsOf, placed, prop, running, seated, seen, seriesResistor, serialHas, serialNumbers, shape, stripComments, transitions } from "../goals";
 import type { Ctx, Lesson, PinSpec } from "../types";
 
 const UNO = (pins: string | string[]): PinSpec => ({ type: "uno", pin: pins });
@@ -354,6 +354,7 @@ const servo: Lesson = {
   minutes: 12,
   summary: "Wire a servo and use the Servo library to turn it to an angle.",
   start: servoStart(),
+  next: "lcd",
   steps: [
     {
       title: "Connect the servo",
@@ -418,4 +419,398 @@ const servo: Lesson = {
   ],
 };
 
-export const arduinoLessons: Lesson[] = [blink, buttonInput, knob, servo];
+
+/* ------------------------------------------------------------------ */
+
+const TEMPLATE_LCD = `// Show "Hello, world!" on a 16x2 LCD wired in 4-bit mode.
+
+void setup() {
+}
+
+void loop() {
+}
+`;
+
+const lcdText = (c: Ctx) => {
+  const lcd = partsOf(c, "lcd1602")[0];
+  const rows = lcd ? c.snap?.parts[lcd.id]?.lcd?.rows : undefined;
+  return rows ? rows.map((r) => String.fromCharCode(...r)).join("\n") : "";
+};
+
+const lcdLesson: Lesson = {
+  id: "lcd",
+  title: "Write to an LCD",
+  track: "arduino",
+  level: "Intermediate",
+  minutes: 20,
+  summary: "Wire a 16×2 character display, tune its contrast, and print text from your sketch.",
+  start: { doc: doc([uno(-34, 0)]), code: TEMPLATE_LCD },
+  next: "ultrasonic",
+  steps: [
+    {
+      title: "Power the display",
+      body: [
+        "A character LCD has its own controller chip. Before it can show anything it needs power. Place a **16×2 LCD** on the bench.",
+        "- Connect **VSS** to a **GND** socket.",
+        "- Connect **VDD** to **5V**.",
+        "- Connect **RW** to **GND** (we only ever write to the display).",
+      ].join("\n"),
+      goals: [
+        placed("lcd1602", "An LCD is on the bench"),
+        joined("VSS reaches GND", { type: "lcd1602", pin: "vss" }, GND),
+        joined("VDD reaches 5V", { type: "lcd1602", pin: "vdd" }, UNO("5v")),
+        joined("RW reaches GND", { type: "lcd1602", pin: "rw" }, GND),
+      ],
+      spotlight: ["lcd1602"],
+      hint: "The display's pins are along its top edge, named in tiny letters. Hover a pin to read its name. 5V and GND are on the bottom edge of the Uno.",
+      after: "The controller chip is now powered, but nothing is visible yet: it needs a backlight and the right contrast.",
+      solution: (prev) => ({
+        ...prev,
+        doc: add(prev.doc, [part("lcd", "lcd1602", 2, 1)], [wire(pin("lcd", "vss"), pin("uno", "gnd2"), BLACK), wire(pin("lcd", "vdd"), pin("uno", "5v"), RED), wire(pin("lcd", "rw"), pin("uno", "gnd3"), BLACK)]),
+      }),
+    },
+    {
+      title: "Light the backlight",
+      body: [
+        "The backlight is an LED inside the display, so it needs a resistor just like any other LED.",
+        "- Place a **220 Ω resistor**.",
+        "- Connect pin **A** (backlight +) through the resistor to **5V**.",
+        "- Connect pin **K** (backlight −) to **GND**.",
+      ].join("\n"),
+      goals: [
+        shape("A resistor sits between pin A and 5V", (c) => seriesResistor(c, { type: "lcd1602", pin: "a" }, UNO("5v"))),
+        prop("resistor", "ohms", "The resistor is 100 Ω or more", (v) => Number(v) >= 100),
+        joined("K reaches GND", { type: "lcd1602", pin: "k" }, GND),
+        seen("The backlight is on", (c) => {
+          const lcd = partsOf(c, "lcd1602")[0];
+          return !!lcd && (c.snap?.parts[lcd.id]?.lcd?.backlight ?? 0) > 0.2;
+        }),
+        running,
+      ],
+      spotlight: ["resistor"],
+      hint: "Pins A and K are the two rightmost pins. Wire A to one end of the resistor, the other end of the resistor to 5V, and K to GND. Then press Run.",
+      after: "Without the resistor the backlight LED would draw far too much current. With it, the glass glows.",
+      solution: (prev) => ({
+        ...prev,
+        doc: add(prev.doc, [part("rbl", "resistor", 22, 24, { ohms: 220 })], [wire(pin("lcd", "a"), pin("rbl", "a"), RED), wire(pin("rbl", "b"), pin("uno", "5v"), RED), wire(pin("lcd", "k"), pin("uno", "gnd3"), BLACK)]),
+      }),
+      demo: (d) => d.run(0.5),
+    },
+    {
+      title: "Set the contrast",
+      body: [
+        "Pin **V0** sets how dark the pixels are. Too high a voltage and the text is invisible; near 0 V it is a row of solid blocks. A **potentiometer** lets you dial in the right level, about 0.5 V.",
+        "- Place a potentiometer.",
+        "- Connect one outer leg to **5V** and the other to **GND**.",
+        "- Connect the **middle leg** to **V0**.",
+        "Press **Run**, select the potentiometer, and move its slider until the display shows a clear row of boxes or text.",
+      ].join("\n"),
+      goals: [
+        shape("The potentiometer has 5V and GND on its outer legs", (c) => {
+          const has = (a: PinSpec, b: PinSpec) => c.nets.resolve(a).some((x) => c.nets.resolve(b).some((y) => x.net === y.net && x.partId !== y.partId));
+          const a: PinSpec = { type: "pot", pin: "a" }, b: PinSpec = { type: "pot", pin: "b" };
+          return (has(a, UNO("5v")) && has(b, GND)) || (has(a, GND) && has(b, UNO("5v")));
+        }),
+        joined("The wiper reaches V0", { type: "pot", pin: "w" }, { type: "lcd1602", pin: "v0" }),
+        running,
+        seen("The contrast is readable", (c) => {
+          const lcd = partsOf(c, "lcd1602")[0];
+          return lcd ? c.snap?.parts[lcd.id]?.extra?.Contrast === "Readable" : false;
+        }),
+      ],
+      spotlight: ["pot"],
+      hint: "The wiper voltage is 5 V × (1 − knob position), so you want the knob well towards the end. Try 0.9 on the slider and look at the display's State in the panel.",
+      after: "The display's contrast is set by one voltage. This is a voltage divider again, just like the multimeter lesson.",
+      solution: (prev) => ({
+        ...prev,
+        doc: add(prev.doc, [part("pot1", "pot", 12, 25, { ohms: 10000, t: 0.9 })], [
+          wire(pin("pot1", "a"), pin("uno", "5v"), RED), wire(pin("pot1", "b"), pin("uno", "gnd3"), BLACK), wire(pin("lcd", "v0"), pin("pot1", "w"), BLUE),
+        ]),
+      }),
+      demo: (d) => d.run(0.5),
+    },
+    {
+      title: "Wire the data lines",
+      body: [
+        "Now the signals. In 4-bit mode the display needs six wires from the Uno. Use these pins, which match the sketch you will write next:",
+        "- **RS** to pin **12**",
+        "- **E** (enable) to pin **11**",
+        "- **D4** to pin **5**, **D5** to pin **4**, **D6** to pin **3**, **D7** to pin **2**",
+        "D0 to D3 stay unconnected: 4-bit mode uses only D4 to D7, sent in two halves.",
+      ].join("\n"),
+      goals: [
+        joined("RS reaches pin 12", { type: "lcd1602", pin: "rs" }, UNO("d12")),
+        joined("E reaches pin 11", { type: "lcd1602", pin: "e" }, UNO("d11")),
+        joined("D4 reaches pin 5", { type: "lcd1602", pin: "d4" }, UNO("d5")),
+        joined("D5 reaches pin 4", { type: "lcd1602", pin: "d5" }, UNO("d4")),
+        joined("D6 reaches pin 3", { type: "lcd1602", pin: "d6" }, UNO("d3")),
+        joined("D7 reaches pin 2", { type: "lcd1602", pin: "d7" }, UNO("d2")),
+      ],
+      hint: "Work down the list one wire at a time. Hover a socket to check its name before you click it.",
+      after: "RS says whether a byte is a command or a character. E says \"the data is ready, read it now\". The data pins carry the byte.",
+      solution: (prev) => ({
+        ...prev,
+        doc: add(prev.doc, [], [
+          wire(pin("lcd", "rs"), pin("uno", "d12"), YELLOW), wire(pin("lcd", "e"), pin("uno", "d11"), GREEN),
+          wire(pin("lcd", "d4"), pin("uno", "d5"), ORANGE), wire(pin("lcd", "d5"), pin("uno", "d4"), BLUE),
+          wire(pin("lcd", "d6"), pin("uno", "d3"), YELLOW), wire(pin("lcd", "d7"), pin("uno", "d2"), GREEN),
+        ]),
+      }),
+    },
+    {
+      title: "Write the sketch",
+      body: [
+        "The **LiquidCrystal** library already knows how to talk to this display. Add `#include <LiquidCrystal.h>` at the top, then tell it which pins you wired: `LiquidCrystal lcd(12, 11, 5, 4, 3, 2);` (RS, E, D4, D5, D6, D7).",
+        "In `setup()`, call `lcd.begin(16, 2);` to start it up, then `lcd.print(\"Hello, world!\");`.",
+      ].join("\n\n"),
+      goals: [
+        codeHas("The LiquidCrystal library is included", /#include\s*<LiquidCrystal\.h>/),
+        codeHas("It is told the pins: 12, 11, 5, 4, 3, 2", /LiquidCrystal\s+\w+\s*\(\s*12\s*,\s*11\s*,\s*5\s*,\s*4\s*,\s*3\s*,\s*2\s*\)/),
+        codeHas("lcd.begin(16, 2) starts the display", /\.begin\s*\(\s*16\s*,\s*2\s*\)/),
+        codeHas("lcd.print shows text", /\.print\s*\(/),
+      ],
+      hint: "The three lines that matter: LiquidCrystal lcd(12, 11, 5, 4, 3, 2); then lcd.begin(16, 2); then lcd.print(\"Hello, world!\"); in setup. Show me gives the full sketch.",
+      after: "Until lcd.begin runs, the display is not initialised, so it only shows solid blocks. begin sends the start-up commands over the pins you wired.",
+      solution: (prev) => ({ ...prev, code: SKETCHES.lcdhello }),
+    },
+    {
+      title: "Read your message",
+      body: "Upload and run. The display should show **Hello, world!** on the first row and a running **Uptime** counter on the second. Select the LCD to see its state.",
+      goals: [
+        built,
+        running,
+        seen("The first row says Hello", (c) => /Hello/.test(lcdText(c))),
+        seen("The second row shows the uptime", (c) => /Uptime: \d/.test(lcdText(c))),
+      ],
+      hint: "If you only see blocks, the sketch has not run lcd.begin yet. If you see nothing, turn the contrast knob.",
+      after: "Each character you print is turned into a pattern of dots by the display's own chip. The sketch only sends the letters.",
+      solution: (prev) => prev,
+      demo: (d) => d.run(2),
+    },
+  ],
+  takeaways: [
+    "A character LCD needs power, a backlight resistor, a contrast voltage and six signal wires.",
+    "The LiquidCrystal library hides the data protocol: begin() then print().",
+    "RS chooses command or data, E clocks it in, D4 to D7 carry the byte in two halves.",
+    "Contrast is a voltage divider on pin V0.",
+  ],
+};
+
+/* ------------------------------------------------------------------ */
+
+const TEMPLATE_SONAR = `// Measure distance with an HC-SR04 ultrasonic sensor.
+
+void setup() {
+}
+
+void loop() {
+}
+`;
+
+const readings = (serial: string) => [...serial.matchAll(/(\d+(?:\.\d+)?) cm/g)].map((m) => Number(m[1]));
+
+const ultrasonic: Lesson = {
+  id: "ultrasonic",
+  title: "Measure distance with sound",
+  track: "arduino",
+  level: "Intermediate",
+  minutes: 15,
+  summary: "Use an ultrasonic sensor to measure how far away an object is, and learn why the answer is the echo time divided by 58.",
+  start: { doc: doc([uno(-30, 2)]), code: TEMPLATE_SONAR },
+  next: "scope",
+  steps: [
+    {
+      title: "Power the sensor",
+      body: [
+        "An **HC-SR04** sends a burst of ultrasound, too high for people to hear, and listens for the echo. It has four pins: **VCC**, **TRIG**, **ECHO** and **GND**.",
+        "Place one on the bench, then connect **VCC** to **5V** and **GND** to a **GND** socket.",
+      ].join("\n\n"),
+      goals: [
+        placed("hcsr04", "An ultrasonic sensor is on the bench"),
+        joined("VCC reaches 5V", { type: "hcsr04", pin: "vcc" }, UNO("5v")),
+        joined("GND reaches GND", { type: "hcsr04", pin: "gnd" }, GND),
+      ],
+      spotlight: ["hcsr04"],
+      hint: "Hover each pin on the sensor to read its name. 5V and GND are on the bottom edge of the Uno.",
+      after: "It needs a steady 5 V; with less, it will not make a reliable measurement.",
+      solution: (prev) => ({
+        ...prev,
+        doc: add(prev.doc, [part("us", "hcsr04", 8, 20, { cm: 100 })], [wire(pin("us", "vcc"), pin("uno", "5v"), RED), wire(pin("us", "gnd"), pin("uno", "gnd2"), BLACK)]),
+      }),
+    },
+    {
+      title: "Wire the signals",
+      body: [
+        "Two pins carry signals. **TRIG** is an input to the sensor: you pulse it to ask for a measurement. **ECHO** is an output from it: it goes high for as long as the sound took to come back.",
+        "Connect **TRIG** to pin **9** and **ECHO** to pin **10**.",
+      ].join("\n\n"),
+      goals: [
+        joined("TRIG reaches pin 9", { type: "hcsr04", pin: "trig" }, UNO("d9")),
+        joined("ECHO reaches pin 10", { type: "hcsr04", pin: "echo" }, UNO("d10")),
+      ],
+      hint: "Pin 9 and pin 10 are neighbours in the top row, in the group marked ~11, ~10, ~9. Take care to wire TRIG to 9 and ECHO to 10, not the other way round.",
+      after: "The Uno will send a pulse out of pin 9 and time the pulse coming back on pin 10.",
+      solution: (prev) => ({ ...prev, doc: add(prev.doc, [], [wire(pin("us", "trig"), pin("uno", "d9"), YELLOW), wire(pin("us", "echo"), pin("uno", "d10"), GREEN)]) }),
+    },
+    {
+      title: "Write the sketch",
+      body: [
+        "To measure: set TRIG low for 2 µs to be sure, then **high for 10 µs**, then low again. That pulse starts a measurement.",
+        "Then `pulseIn(echoPin, HIGH)` waits for ECHO to go high, times how long it stays high, and returns that time in **microseconds**.",
+        "Sound travels about 29 µs per centimetre, and the echo goes there and back, so **distance in cm = echo time ÷ 58**. Print it with `Serial.print`.",
+      ].join("\n\n"),
+      goals: [
+        codeHas("TRIG is made an output and ECHO an input", /pinMode\s*\([^)]*OUTPUT/),
+        codeHas("pulseIn times the echo", /pulseIn\s*\(/),
+        codeHas("delayMicroseconds makes the short pulse", /delayMicroseconds\s*\(/),
+        codeHas("The distance is printed", /Serial\.print(ln)?\s*\(/),
+      ],
+      hint: "digitalWrite(trigPin, HIGH); delayMicroseconds(10); digitalWrite(trigPin, LOW); long t = pulseIn(echoPin, HIGH); then print t / 58.0. Show me gives the full sketch.",
+      after: "pulseIn counts microseconds with the chip's own timer, accurate to better than a millionth of a second. That is how the distance comes out to about half a centimetre.",
+      solution: (prev) => ({ ...prev, code: SKETCHES.ultrasonic }),
+    },
+    {
+      title: "Move the object",
+      body: "Upload and run. Select the sensor and drag the **Object distance** slider. The serial monitor should follow: try **20 cm**, then **150 cm**.",
+      goals: [
+        built,
+        running,
+        seen("The reading was about 20 cm", (c) => readings(c.serial).some((r) => Math.abs(r - 20) < 1.5)),
+        seen("The reading was about 150 cm", (c) => readings(c.serial).some((r) => Math.abs(r - 150) < 1.5)),
+      ],
+      hint: "Click the sensor, then use the Object distance slider in the side panel. Open the Serial monitor tab to read the numbers.",
+      after: "Your sketch measured the speed of sound without knowing it: 343 metres per second is what makes 58 microseconds per centimetre of range.",
+      solution: (prev) => prev,
+      demo: (d) => {
+        d.setProp("hcsr04", "cm", 20);
+        d.run(1.2);
+        d.setProp("hcsr04", "cm", 150);
+        d.run(1.2);
+      },
+    },
+  ],
+  takeaways: [
+    "A 10 µs pulse on TRIG starts a measurement; ECHO stays high for the sound's round trip.",
+    "pulseIn measures a pulse's length in microseconds.",
+    "Distance in cm = echo time in µs ÷ 58, because sound covers about 1 cm in 29 µs each way.",
+    "Sensors like this turn a physical quantity into a time, which a microcontroller can measure very precisely.",
+  ],
+};
+
+/* ------------------------------------------------------------------ */
+
+const scopeStart = () => {
+  const ports = benchWithGround();
+  return {
+    doc: add(ports, [part("r1", "resistor", 5, 12, { ohms: 10000 }), part("c1", "capacitor", 9, 11, { farads: 1e-6 })], [
+      wire(pin("uno", "d9"), hole(5, 14), YELLOW), wire(pin("uno", "a0"), hole(9, 14), BLUE), wire(hole(10, 14), hole(10, 18), BLACK),
+    ]),
+    code: SKETCHES.pwmscope,
+  };
+};
+
+const statsOf = (c: Ctx) => {
+  const sc = partsOf(c, "scope")[0];
+  return sc ? c.snap?.parts[sc.id]?.scope : undefined;
+};
+
+const scopeLesson: Lesson = {
+  id: "scope",
+  title: "See a signal with the oscilloscope",
+  track: "arduino",
+  level: "Intermediate",
+  minutes: 15,
+  summary: "Probe a PWM signal and its filtered result, and read frequency and duty cycle off the screen.",
+  start: scopeStart(),
+  steps: [
+    {
+      title: "Put a scope on the bench",
+      body: [
+        "A multimeter gives you one number. An **oscilloscope** draws how a voltage changes over time, so you can see shapes you could never read from a number: pulses, waves, glitches.",
+        "A sketch is already loaded: it makes a **PWM** signal on pin 9, which switches on and off about 490 times a second, and a resistor and capacitor smooth it into a steady voltage that pin A0 reads.",
+        "Place an **oscilloscope** on the bench.",
+      ].join("\n\n"),
+      goals: [placed("scope", "An oscilloscope is on the bench")],
+      spotlight: ["scope"],
+      hint: "Find it in the Parts list under Instruments and drop it to the right of the breadboard.",
+      after: "The scope has two probe pins, CH1 and CH2, and a ground clip.",
+      solution: (prev) => ({ ...prev, doc: add(prev.doc, [part("scope1", "scope", 36, 26, { tdiv: "0.002", v1div: "1", v2div: "1", trig: 2.5 })]) }),
+    },
+    {
+      title: "Clip the ground, then probe",
+      body: [
+        "A scope measures voltage **relative to its ground clip**, so always connect that first.",
+        "- Connect the **ground clip** (GND) to the **− rail** (which is joined to the Uno's GND).",
+        "- Connect probe **CH1** to the PWM signal: the column the pin 9 wire goes into, next to the resistor.",
+        "- Connect probe **CH2** to the smoothed voltage: the column that goes to pin A0.",
+      ].join("\n"),
+      goals: [
+        joined("The ground clip reaches ground", { type: "scope", pin: "gnd" }, GND),
+        joined("CH1 is on the pin 9 signal", { type: "scope", pin: "ch1" }, UNO("d9")),
+        joined("CH2 is on the A0 node", { type: "scope", pin: "ch2" }, UNO("a0")),
+      ],
+      hint: "CH1 goes to the same column as the pin 9 wire (column 5). CH2 goes to the same column as the A0 wire (column 9).",
+      after: "Probes only listen: they have a very high resistance, so they hardly change the circuit they measure.",
+      solution: (prev) => ({
+        ...prev,
+        doc: add(prev.doc, [], [wire(pin("scope1", "ch1"), hole(5, 15), YELLOW), wire(pin("scope1", "ch2"), hole(9, 15), BLUE), wire(pin("scope1", "gnd"), hole(3, 18), BLACK)]),
+      }),
+    },
+    {
+      title: "Read the PWM wave",
+      body: [
+        "Press **Run** (it uploads the sketch for you). The yellow trace is pin 9: a square wave. For the first 1.5 seconds the sketch uses a **25 % duty cycle**: the pin is high a quarter of the time.",
+        "The scope measures the signal itself: look at the top of its screen for the **frequency** (about 490 Hz) and the **duty cycle**.",
+      ].join("\n\n"),
+      goals: [
+        built,
+        running,
+        seen("The scope read about 490 Hz", (c) => {
+          const f = statsOf(c)?.stats1.freq;
+          return f !== undefined && f > 470 && f < 510;
+        }),
+        seen("It read a duty cycle of about 25 %", (c) => {
+          const d = statsOf(c)?.stats1.duty;
+          return d !== undefined && d > 0.2 && d < 0.3;
+        }),
+      ],
+      hint: "If the wave is not steady, set the scope's Time per division to 2 ms by selecting the scope and choosing it in the side panel.",
+      after: (c) => {
+        const s = statsOf(c);
+        return s?.stats1.freq ? `The scope measured ${Math.round(s.stats1.freq)} Hz. That frequency is set by the chip's timer. The sketch only chooses the duty cycle: 64 out of 255 is about 25 %.` : "The frequency is set by the chip's timer; the sketch only chooses the duty cycle.";
+      },
+      solution: (prev) => prev,
+      demo: (d) => d.run(1.2),
+    },
+    {
+      title: "Slow the timebase",
+      body: [
+        "The cyan trace is the voltage after the resistor and capacitor. The filter smooths the fast pulses into their **average**: 25 % of 5 V is about 1.25 V, and 75 % is about 3.75 V.",
+        "To see this change, select the scope and set **Time per division** to **50 ms** or more, so the screen covers half a second or longer. Then watch for the sketch to switch from 25 % to 75 %.",
+      ].join("\n\n"),
+      goals: [
+        prop("scope", "tdiv", "The timebase is 50 ms per division or slower", (v) => Number(v) >= 0.05),
+        seen("The smoothed voltage averaged about 1.25 V", (c) => {
+          const m = statsOf(c)?.stats2.mean;
+          return m !== undefined && m > 1.1 && m < 1.45;
+        }),
+        seen("Then it averaged about 3.75 V", (c) => {
+          const m = statsOf(c)?.stats2.mean;
+          return m !== undefined && m > 3.4 && m < 4.0;
+        }),
+      ],
+      hint: "Click the scope, choose 50 ms under Time per division, and wait a few seconds. The serial monitor also prints the voltage on A0.",
+      after: "Pulse-width modulation is a way to make an analog voltage from a digital pin: the duty cycle sets the average. It is how analogWrite dims an LED and sets motor speed.",
+      solution: (prev) => ({ ...prev, doc: { ...prev.doc, parts: prev.doc.parts.map((p) => (p.id === "scope1" ? { ...p, props: { ...p.props, tdiv: "0.05" } } : p)) } }),
+      demo: (d) => d.run(3.2),
+    },
+  ],
+  takeaways: [
+    "An oscilloscope shows voltage against time; connect its ground clip first.",
+    "A PWM signal's frequency is fixed by the chip; the duty cycle is what the sketch chooses.",
+    "The average voltage of a PWM signal is the duty cycle times the supply.",
+    "A resistor and capacitor can smooth pulses into a steady voltage.",
+  ],
+};
+
+export const arduinoLessons: Lesson[] = [blink, buttonInput, knob, servo, lcdLesson, ultrasonic, scopeLesson];

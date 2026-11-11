@@ -269,7 +269,7 @@ const button: Lesson = {
   minutes: 8,
   summary: "Add a push button to a circuit so the LED lights only while you hold it.",
   start: { doc: buttonStart(), code: "" },
-  next: "transistor",
+  next: "capacitor",
   steps: [
     {
       title: "Place a push button",
@@ -458,4 +458,120 @@ const transistor: Lesson = {
   ],
 };
 
-export const circuitLessons: Lesson[] = [firstCircuit, voltage, button, transistor];
+
+/* ------------------------------------------------------------------ */
+
+const meterV = (c: Ctx) => {
+  const m = partsOf(c, "meter")[0];
+  return m ? c.snap?.parts[m.id]?.v : undefined;
+};
+
+const capacitor: Lesson = {
+  id: "capacitor",
+  title: "Capacitors: charge and time",
+  track: "circuits",
+  level: "Intermediate",
+  minutes: 12,
+  summary: "Watch a capacitor fill through a resistor, and see how the resistor sets how long it takes.",
+  start: { doc: poweredBoard(), code: "" },
+  next: "transistor",
+  steps: [
+    {
+      title: "Place a capacitor",
+      body: [
+        "A **capacitor** stores electric charge, a little like a small tank that fills with water. Its size is measured in **farads**; the one you will use holds 100 µF (microfarads).",
+        "This kind, an **electrolytic** capacitor, has a polarity: one leg is positive and one negative. The stripe on the body marks the negative leg.",
+        "Plug a capacitor into the breadboard.",
+      ].join("\n\n"),
+      goals: [seated("capacitor", "A capacitor is plugged into the breadboard")],
+      spotlight: ["capacitor"],
+      hint: "Drag it from the Parts list. Its two legs go in two neighbouring columns. The + leg is the long one, on the left.",
+      after: "Notice it has a + leg and a − leg. Put it in backwards and a real one can heat up and burst, so the simulator warns you.",
+      solution: (prev) => ({ ...prev, doc: add(prev.doc, [part("c1", "capacitor", 13, 11, { farads: 0.0001 })]) }),
+    },
+    {
+      title: "Charge it through a resistor",
+      body: [
+        "A capacitor connected straight to a battery charges almost instantly. Putting a **resistor** in the way slows it down, and the delay is the **time constant**: τ = R × C.",
+        "- Place a resistor and set it to **10 kΩ**.",
+        "- Connect it between the **+ rail** and the capacitor's **+ leg**.",
+        "- Connect the capacitor's **− leg** to the **− rail**.",
+        "With 10 kΩ and 100 µF, τ = 10 000 Ω × 0.0001 F = **1 second**.",
+      ].join("\n"),
+      goals: [
+        seated("resistor", "A resistor is plugged into the breadboard"),
+        prop("resistor", "ohms", "It is 10 kΩ", (v) => Number(v) >= 9000 && Number(v) <= 11000),
+        shape("The resistor sits between the + rail and the capacitor's + leg", (c) => seriesResistor(c, { type: "capacitor", pin: "pos" }, POS)),
+        joined("The capacitor's − leg reaches the − rail", { type: "capacitor", pin: "neg" }, NEG),
+      ],
+      spotlight: ["resistor"],
+      hint: "Put the resistor's right lead in the capacitor's + column (the left one). Wire the resistor's left lead to the red + rail, and wire the capacitor's right column to the blue − rail.",
+      after: "Current will now flow through the resistor to fill the capacitor. As it fills, it pushes back, so the current falls and the voltage creeps up more and more slowly.",
+      solution: (prev) => ({
+        ...prev,
+        doc: add(prev.doc, [part("r1", "resistor", 9, 12, { ohms: 10000 })], [wire(hole(9, 14), hole(9, 17), RED), wire(hole(14, 14), hole(14, 18), BLACK)]),
+      }),
+    },
+    {
+      title: "Measure the capacitor",
+      body: "To see it fill, measure the voltage across it. Place a **multimeter**, connect its **COM** probe to the **− rail**, and its **V** probe to the capacitor's **+ leg**.",
+      goals: [
+        placed("meter", "A multimeter is on the bench"),
+        joined("COM goes to the − rail", { type: "meter", pin: "com" }, NEG),
+        joined("V goes to the capacitor's + leg", { type: "meter", pin: "v" }, { type: "capacitor", pin: "pos" }),
+      ],
+      spotlight: ["meter"],
+      hint: "Wire the meter's red V probe to the column of the capacitor's + leg (column 13), and its black COM probe to the blue − rail.",
+      after: "The meter now reads the capacitor's voltage. It starts at 0 V.",
+      solution: (prev) => ({
+        ...prev,
+        doc: add(prev.doc, [part("m1", "meter", 36, 22, { mode: "V" })], [wire(pin("m1", "com"), hole(29, 18), BLACK), wire(pin("m1", "v"), hole(13, 14), BLUE)]),
+      }),
+    },
+    {
+      title: "Watch it charge",
+      body: [
+        "Press **Run** and watch the meter. The voltage climbs quickly at first and then slows as it nears 9 V.",
+        "After **one time constant** (1 second) a capacitor reaches about **63 %** of the supply. That is about 5.7 V here. After five time constants it is within 1 % of full.",
+      ].join("\n\n"),
+      goals: [
+        running,
+        seen("The meter passed about 5.7 V", (c) => {
+          const v = meterV(c);
+          return v !== undefined && v > 5.4 && v < 6.0;
+        }),
+        seen("The meter climbed above 8.4 V", (c) => (meterV(c) ?? 0) > 8.4),
+      ],
+      hint: "Just press Run and wait a few seconds. The clock at the top right shows how long it has been running.",
+      after: (c) => `It took about ${(c.snap?.time ?? 3).toFixed(1)} seconds to get this far. The shape is the same for every capacitor: fast at first, then slower, a curve called exponential charging.`,
+      solution: (prev) => prev,
+      demo: (d) => d.run(3.4),
+    },
+    {
+      title: "Make it slower",
+      body: [
+        "Change the resistor to **47 kΩ**. Now τ = 47 000 × 0.0001 = **4.7 seconds**, so it should charge nearly five times more slowly.",
+        "Press **Reset** (next to Run) to empty the capacitor, then press **Run** again. After 1.5 seconds the meter should still be below 4 V.",
+      ].join("\n\n"),
+      goals: [
+        prop("resistor", "ohms", "The resistor is 33 kΩ or more", (v) => Number(v) >= 33000),
+        seen("After 1.5 s the meter was still under 4 V", (c) => {
+          const m = partsOf(c, "meter")[0];
+          return !!m && c.trace.some((f) => f.t >= 1.5 && (f.parts[m.id]?.v ?? 9) < 4);
+        }),
+      ],
+      hint: "Click the resistor, set its value to 47k, then press Reset and Run. The capacitor must start empty for the test to work.",
+      after: "Resistor times capacitor sets the time. Big resistor, slow charge. Timers, delays and smoothing filters in electronics all use this idea.",
+      solution: (prev) => ({ ...prev, doc: withProp(prev.doc, "r1", "ohms", 47000) }),
+      demo: (d) => d.run(2),
+    },
+  ],
+  takeaways: [
+    "A capacitor stores charge; its voltage cannot change instantly.",
+    "Through a resistor it charges on a curve with time constant τ = R × C.",
+    "After one time constant it is about 63 % full; after five, nearly full.",
+    "Electrolytic capacitors have a + and a − leg and must be connected the right way round.",
+  ],
+};
+
+export const circuitLessons: Lesson[] = [firstCircuit, voltage, button, capacitor, transistor];

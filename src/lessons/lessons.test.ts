@@ -136,4 +136,25 @@ describe("wrong answers are not accepted", () => {
     const gone = evaluateStep(lesson.steps[1], ctx({ ...chain[2].doc, wires: [] }, false));
     expect(gone.done).toBe(false);
   });
+
+  it("LCD data wires in the wrong order are not accepted", () => {
+    const chain = solutionChain(lessonById("lcd")!);
+    const swapped = { ...chain[4].doc, wires: chain[4].doc.wires.map((w) => (w.a.part === "lcd" && w.a.pin === "d4" ? { ...w, b: { part: "uno", pin: "d2" } } : w)) };
+    const passed = goalsPassing("lcd", 3, swapped as never);
+    expect(passed.filter(Boolean).length).toBeLessThan(passed.length);
+    expect(passed[2]).toBe(false); // D4 must reach pin 5
+  });
+
+  it("ultrasonic TRIG and ECHO swapped are not accepted", () => {
+    const chain = solutionChain(lessonById("ultrasonic")!);
+    const swapped = { ...chain[2].doc, wires: chain[2].doc.wires.map((w) => (w.a.pin === "trig" ? { ...w, b: { part: "uno", pin: "d10" } } : w.a.pin === "echo" ? { ...w, b: { part: "uno", pin: "d9" } } : w)) };
+    expect(goalsPassing("ultrasonic", 1, swapped as never)).toEqual([false, false]);
+  });
+
+  it("a capacitor charged with no resistor in the way is not accepted", () => {
+    const chain = solutionChain(lessonById("capacitor")!);
+    const direct = { ...chain[2].doc, parts: chain[2].doc.parts.filter((p) => p.id !== "r1"), wires: [...chain[2].doc.wires.filter((w) => w.a.part !== "bb" || w.a.pin !== "9_14"), wire(hole(13, 14), hole(11, 17), RED)] };
+    const passed = goalsPassing("capacitor", 1, direct as never);
+    expect(passed.every(Boolean)).toBe(false);
+  });
 });

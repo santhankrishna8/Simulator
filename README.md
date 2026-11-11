@@ -32,7 +32,7 @@ These devices need exact timing, which the circuit solver's 0.2 ms steps cannot 
 
 **Phase 4: guided lessons**
 
-- **Eight lessons** in two tracks. Circuits: light an LED, voltage and the multimeter, control it with a button, switch a load with a transistor. Arduino: blink, read a button, read a knob, move a servo. Each is a short series of steps (36 in all).
+- **Twelve lessons** in two tracks. Circuits: light an LED, voltage and the multimeter, control it with a button, capacitors and time, switch a load with a transistor. Arduino: blink, read a button, read a knob, move a servo, write to an LCD, measure distance with sound, see a signal with the oscilloscope. Each is a short series of steps (58 in all).
 - **Goals are checked against what you actually built.** "The resistor sits between the + rail and the LED's anode" is verified from your wiring, "the LED blinked" from the live simulation, and "your sketch calls `digitalWrite`" from the editor. Steps tick off as you go and the lesson moves on when you choose.
 - **Hints, "show me" and explanations.** Every step has a hint, a "Show me" that builds the answer (undoable, and it asks twice), and an explanation of what just happened using your circuit's real numbers.
 - **Parts light up** in the drawer when a step asks for them. Progress is saved in the browser.
@@ -49,6 +49,11 @@ Lessons live in `src/lessons/`. To add one, write a `Lesson` in `src/lessons/con
 - The OpenAI key stays on the server (`/api/tutor`). It is never sent to the browser, never echoed in an error, and a per-visitor limit slows runaway use.
 
 To turn it on, add `OPENAI_API_KEY` in Vercel's environment variables (and optionally `OPENAI_MODEL`, default `gpt-4o-mini`), then redeploy. Set a monthly spending limit on the key in the OpenAI dashboard: that is the real cost cap.
+
+**Sharing and building for real**
+
+- **Share** makes a link holding your bench and sketch (compressed into the URL, so nothing is stored on a server), or a project file. Anything opened from outside is validated and needs your confirmation first.
+- **Build guide**: a printable shopping list with real part names and resistor colour bands, tick-box placement and wiring in breadboard coordinates, the sketch, and safety checks.
 
 Planned next: OLED and I²C, and ESP32/IoT.
 
