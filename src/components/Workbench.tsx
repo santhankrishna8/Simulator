@@ -8,6 +8,7 @@ import { useStore } from "@/store";
 import Canvas from "./Canvas";
 import Drawer from "./Drawer";
 import Inspector from "./Inspector";
+import LessonLibrary from "./LessonLibrary";
 import { GraphicsDefs } from "./PartGraphics";
 
 const Dock = dynamic(() => import("./Dock"), { ssr: false });
@@ -28,6 +29,24 @@ function useSimLink() {
       if (s.doc !== prev.doc) sim.send({ t: "doc", doc: s.doc });
       if (s.pressed !== prev.pressed) sim.send({ t: "pressed", ids: Array.from(s.pressed) });
     });
+  }, []);
+}
+
+/** Re-check the lesson's goals whenever something they depend on changes, at most once per frame. */
+function useLessonChecks() {
+  useEffect(() => {
+    let queued = false;
+    const unsub = useStore.subscribe((s, prev) => {
+      if (!s.lesson) return;
+      if (s.doc === prev.doc && s.code === prev.code && s.build === prev.build && s.running === prev.running && s.snapshot === prev.snapshot && s.serial === prev.serial && s.lesson === prev.lesson) return;
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(() => {
+        queued = false;
+        useStore.getState().evaluateLesson();
+      });
+    });
+    return unsub;
   }, []);
 }
 
@@ -86,6 +105,7 @@ function Toast() {
 
 export default function Workbench() {
   useSimLink();
+  useLessonChecks();
   useShortcuts();
   const running = useStore((s) => s.running);
   const building = useStore((s) => s.build.status === "building");
@@ -96,7 +116,8 @@ export default function Workbench() {
   const sound = useStore((s) => s.sound);
   const dockOpen = useStore((s) => s.dockOpen);
   const danger = useStore((s) => s.snapshot?.warnings.filter((w) => w.level !== "info").length ?? 0);
-  const { set, undo, redo, toggleRun, resetSim } = useStore.getState();
+  const lessonActive = useStore((s) => !!s.lesson);
+  const { set, undo, redo, toggleRun, resetSim, openLibrary } = useStore.getState();
   const [sheet, setSheet] = useState<"parts" | "inspect" | "code" | null>(null);
 
   // On small screens, open the inspector when something gets selected, and
@@ -105,7 +126,11 @@ export default function Workbench() {
     () =>
       useStore.subscribe((s, prev) => {
         if (!window.matchMedia("(max-width: 900px)").matches) return;
-        if (s.fitTick !== prev.fitTick) {
+        if (s.lesson && s.lesson.id !== prev.lesson?.id) {
+          // A lesson just started: show its first step, not the bare bench.
+          setSheet("inspect");
+          useStore.setState({ dockOpen: false });
+        } else if (s.fitTick !== prev.fitTick) {
           setSheet(null);
           useStore.setState({ dockOpen: false });
         } else if (s.selection && s.selection !== prev.selection) setSheet("inspect");
@@ -132,6 +157,14 @@ export default function Workbench() {
         </div>
 
         <div className="tools">
+          <button type="button" className={`btn lessons-btn${lessonActive ? " is-on" : ""}`} onClick={() => openLibrary(true)}>
+            <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden>
+              <path d="M2 4.5L8 2l6 2.5L8 7z" fill="currentColor" />
+              <path d="M4 7.5v3c0 1 1.8 2 4 2s4-1 4-2v-3L8 9.2z" fill="currentColor" opacity="0.7" />
+            </svg>
+            Lessons
+          </button>
+          <span className="sep" />
           <button type="button" className="btn is-ghost" onClick={undo} disabled={!canUndo} title="Undo (Ctrl+Z)">Undo</button>
           <button type="button" className="btn is-ghost" onClick={redo} disabled={!canRedo} title="Redo (Ctrl+Shift+Z)">Redo</button>
           <span className="sep" />
@@ -172,12 +205,13 @@ export default function Workbench() {
         {dockOpen && <Dock />}
       </main>
       <Inspector />
+      <LessonLibrary />
 
       <nav className="tabs" aria-label="Panels">
         <button type="button" aria-pressed={sheet === "parts"} onClick={() => toggleSheet("parts")}>Parts</button>
         <button type="button" aria-pressed={sheet === "code"} onClick={() => toggleSheet("code")}>Code</button>
         <button type="button" aria-pressed={sheet === "inspect"} onClick={() => toggleSheet("inspect")}>
-          Inspect{danger > 0 && <em>{danger}</em>}
+          {lessonActive ? "Lesson" : "Inspect"}{danger > 0 && <em>{danger}</em>}
         </button>
       </nav>
     </div>

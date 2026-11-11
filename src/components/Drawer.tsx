@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { lessonById } from "@/lessons";
 import { CATALOG_LIST, CATEGORIES, type PartDef } from "@/sim/catalog";
 import { useStore } from "@/store";
 import { PartGraphic, U } from "./PartGraphics";
@@ -19,6 +20,13 @@ export default function Drawer({ onPicked }: { onPicked?: () => void }) {
   const [query, setQuery] = useState("");
   const set = useStore((s) => s.set);
   const dragged = useRef(false);
+  const spot = useStore((s) => (s.lesson ? (lessonById(s.lesson.id)?.steps[s.lesson.step]?.spotlight ?? null) : null));
+  const list = useRef<HTMLDivElement>(null);
+  // Bring the first part a lesson step asks for into view.
+  useEffect(() => {
+    if (!spot?.length) return;
+    list.current?.querySelector<HTMLElement>(`[data-type="${spot[0]}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [spot]);
   const q = query.trim().toLowerCase();
   const groups = useMemo(
     () =>
@@ -41,7 +49,7 @@ export default function Drawer({ onPicked }: { onPicked?: () => void }) {
           onChange={(e) => setQuery(e.target.value)}
         />
       </div>
-      <div className="drawer-list">
+      <div className="drawer-list" ref={list}>
         {groups.map((g) => (
           <section key={g.cat}>
             <h3>{g.cat}</h3>
@@ -50,7 +58,8 @@ export default function Drawer({ onPicked }: { onPicked?: () => void }) {
                 <li key={def.type}>
                   <button
                     type="button"
-                    className="part-card"
+                    className={`part-card${spot?.includes(def.type) ? " is-spot" : ""}`}
+                    data-type={def.type}
                     onPointerDown={(e) => {
                       // Mouse and pen drag the part out. Touch scrolls the list, so a tap adds instead.
                       if (e.pointerType === "touch" || (e.pointerType === "mouse" && e.button !== 0)) return;

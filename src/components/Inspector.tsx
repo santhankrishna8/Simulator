@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { LESSONS, lessonById } from "@/lessons";
+import LessonCard from "./LessonCard";
 import { BATTERIES, CATALOG, LED_COLORS, formatSI, parseSI, type PropDef } from "@/sim/catalog";
 import type { Warning } from "@/sim/engine";
 import { EXAMPLES, type Example } from "@/sim/examples";
@@ -308,6 +310,28 @@ function ExampleList({ title, items, onPick }: { title: string; items: Example[]
   );
 }
 
+function LearnTeaser() {
+  const active = useStore((s) => !!s.lesson);
+  const done = useStore((s) => s.lessonDone);
+  const start = useStore((s) => s.startLesson);
+  const open = useStore((s) => s.openLibrary);
+  const started = LESSONS.find((l) => (done[l.id]?.length ?? 0) > 0 && (done[l.id]?.length ?? 0) < l.steps.length);
+  const first = LESSONS.find((l) => !done[l.id]?.length);
+  const target = started ?? first;
+  if (!target || active) return null;
+  const resume = started ? Math.min(started.steps.length - 1, Math.max(...(done[started.id] ?? [0])) + 1) : 0;
+  return (
+    <section className="teaser">
+      <h3>{started ? "Pick up where you left off" : "New here?"}</h3>
+      <button type="button" className="teaser-card" onClick={() => start(target.id, resume)}>
+        <b>{target.title}</b>
+        <span>{started ? `Step ${resume + 1} of ${target.steps.length}` : target.summary}</span>
+      </button>
+      <button type="button" className="link" onClick={() => open(true)}>All lessons</button>
+    </section>
+  );
+}
+
 function Overview() {
   const running = useStore((s) => s.running);
   const snapshot = useStore((s) => s.snapshot);
@@ -319,6 +343,7 @@ function Overview() {
         <h2>Circuit check</h2>
       </div>
       <div className="panel-body">
+        <LearnTeaser />
         {!snapshot ? (
           <p className="muted">Press Run and the bench checks your circuit as it works: shorts, overloads and parts in backwards.</p>
         ) : warnings.length ? (
@@ -344,9 +369,13 @@ function Overview() {
 export default function Inspector() {
   const selection = useStore((s) => s.selection);
   const part = useStore((s) => (selection?.kind === "part" ? s.doc.parts.find((p) => p.id === selection.id) : undefined));
+  const lessonOn = useStore((s) => !!s.lesson && !!lessonById(s.lesson.id));
   return (
-    <aside className="inspector" aria-label="Inspector">
-      {part ? <PartPanel key={part.id} part={part} /> : selection?.kind === "wire" ? <WirePanel id={selection.id} /> : <Overview />}
+    <aside className={`inspector${lessonOn ? " has-lesson" : ""}`} aria-label="Inspector">
+      {lessonOn && <LessonCard />}
+      <div className="inspector-main">
+        {part ? <PartPanel key={part.id} part={part} /> : selection?.kind === "wire" ? <WirePanel id={selection.id} /> : <Overview />}
+      </div>
     </aside>
   );
 }

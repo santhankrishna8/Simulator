@@ -30,7 +30,17 @@ An electronics bench in the browser. Build circuits on a breadboard with real in
 
 These devices need exact timing, which the circuit solver's 0.2 ms steps cannot give. So pin changes reach them with their exact CPU cycle, and what they drive back reaches the chip at an exact cycle.
 
-Planned next: OLED and I²C, guided lessons, an AI tutor, and ESP32/IoT.
+**Phase 4: guided lessons**
+
+- **Eight lessons** in two tracks. Circuits: light an LED, voltage and the multimeter, control it with a button, switch a load with a transistor. Arduino: blink, read a button, read a knob, move a servo. Each is a short series of steps (36 in all).
+- **Goals are checked against what you actually built.** "The resistor sits between the + rail and the LED's anode" is verified from your wiring, "the LED blinked" from the live simulation, and "your sketch calls `digitalWrite`" from the editor. Steps tick off as you go and the lesson moves on when you choose.
+- **Hints, "show me" and explanations.** Every step has a hint, a "Show me" that builds the answer (undoable, and it asks twice), and an explanation of what just happened using your circuit's real numbers.
+- **Parts light up** in the drawer when a step asks for them. Progress is saved in the browser.
+- Every step of every lesson is tested: its model solution must pass all its goals when played the way a learner would, and a step must not already be complete when you arrive. Wrong answers (an LED with no resistor, a button wired around the resistor) are tested to be rejected.
+
+Lessons live in `src/lessons/`. To add one, write a `Lesson` in `src/lessons/content/`: the steps, their goals, and a model solution for each step. The tests then check it automatically.
+
+Planned next: an AI tutor that can see your circuit and code, OLED and I²C, and ESP32/IoT.
 
 ## Run it
 
@@ -69,6 +79,7 @@ npm run lint
 | `src/sim/engine.ts` | Time stepping, part damage, warnings, the Uno's link to the circuit |
 | `src/sim/mcu.ts` | The ATmega328P (avr8js) and Intel HEX loading |
 | `src/sim/worker.ts` | Runs the engine off the main thread |
+| `src/lessons/` | Lesson content, goal checks, and how steps are evaluated |
 | `compile-service/` | Turns sketches into hex files (runs in Docker, not on Vercel) |
 | `src/app/api/compile/` | Validates requests and forwards them to the compile service |
 | `src/sim/catalog.ts` | Part definitions, pins and learning text |

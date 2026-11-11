@@ -18,6 +18,22 @@ void loop() {
 }
 `,
 
+  blinkfast: `// Blink, faster: the same sketch with a 200 ms delay.
+
+const int ledPin = 13;
+
+void setup() {
+  pinMode(ledPin, OUTPUT);
+}
+
+void loop() {
+  digitalWrite(ledPin, HIGH);
+  delay(200);
+  digitalWrite(ledPin, LOW);
+  delay(200);
+}
+`,
+
   fade: `// Fade: pulse-width modulation (PWM) makes an LED look dimmer.
 // analogWrite(pin, 0..255) switches the pin on and off about 490 times a
 // second. The longer it stays on, the brighter the LED looks.

@@ -6,6 +6,11 @@ import { CATALOG, HOLES, type PartType } from "./sim/catalog";
 import { sim } from "./sim/client";
 import type { Snapshot } from "./sim/engine";
 import { EXAMPLES, type Example } from "./sim/examples";
+import { SKETCHES } from "./sim/sketches.mjs";
+import { evaluateStep, type StepResult } from "./lessons/evaluate";
+import { lessonById, solutionChain } from "./lessons";
+import { buildNets, type Nets } from "./lessons/nets";
+import type { Frame } from "./lessons/types";
 import {
   collides, holeMap, occupiedHoles, partsOnBoard, refPos, WIRE_COLORS,
   type Doc, type Part, type PinRef, type Rot,
@@ -71,6 +76,25 @@ interface State {
   dockTab: "code" | "serial" | "plotter";
   dockH: number;
 
+  /* ----- lessons ----- */
+  /** The lesson being followed. `step` equals the step count once the lesson is finished. */
+  lesson: { id: string; step: number } | null;
+  /** Step numbers finished, per lesson, kept between visits. */
+  lessonDone: Record<string, number[]>;
+  stepResult: StepResult | null;
+  /** The step's goals have all been met at least once, so the card does not flip back. */
+  stepComplete: boolean;
+  hintOpen: boolean;
+  libraryOpen: boolean;
+  /** Recent frames, for goals about what happened (kept only during a lesson). */
+  trace: Frame[];
+
+  openLibrary(open: boolean): void;
+  startLesson(id: string, step?: number): void;
+  exitLesson(): void;
+  lessonGo(step: number): void;
+  lessonShowMe(): void;
+  evaluateLesson(): void;
   setCode(code: string): void;
   upload(): Promise<void>;
   toggleRun(): Promise<void>;
@@ -105,6 +129,8 @@ interface State {
 const STORAGE_KEY = "simulator.doc.v1";
 const SKETCH_KEY = "simulator.sketch.v1";
 const DEFAULT_CODE = `void setup() {\n  // runs once\n}\n\nvoid loop() {\n  // runs forever\n}\n`;
+const LESSON_KEY = "simulator.lessons.v1";
+let netsCache: { doc: Doc | null; nets: Nets } = { doc: null, nets: { net: () => undefined, resolve: () => [] } };
 let idCounter = 0;
 const newId = (prefix: string) => `${prefix}${Date.now().toString(36)}${(idCounter++).toString(36)}`;
 
@@ -128,6 +154,14 @@ export function loadSaved(): Doc | null {
 function saveSketch(s: { code: string; exampleId: string | null; builtCode: string | null; hex: string | null; build?: Build }) {
   try {
     localStorage.setItem(SKETCH_KEY, JSON.stringify(s));
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+function saveLessons(s: { lessonDone: Record<string, number[]>; lesson: { id: string; step: number } | null }) {
+  try {
+    localStorage.setItem(LESSON_KEY, JSON.stringify({ done: s.lessonDone, current: s.lesson }));
   } catch {
     /* storage unavailable */
   }
@@ -164,11 +198,14 @@ function resolveEnd(doc: Doc, ref: PinRef): PinRef | null {
   return { part: board.id, pin: options[0].id };
 }
 
-const EXAMPLE_SKETCHES = new Map(EXAMPLES.filter((e) => e.sketch).map((e) => [e.id, e.sketch!]));
+/** The id of the bundled sketch this code is, letter for letter, or null. */
+function bundledIdFor(code: string): string | null {
+  return Object.keys(SKETCHES).find((k) => SKETCHES[k as keyof typeof SKETCHES] === code) ?? null;
+}
 
-/** The bundled program for an example, if the code is still exactly the example's. */
+/** The bundled program for a sketch, if the code is still exactly that sketch. */
 async function bundledHex(id: string, code: string): Promise<string | null> {
-  if (EXAMPLE_SKETCHES.get(id) !== code) return null;
+  if ((SKETCHES as Record<string, string>)[id] !== code) return null;
   const { PREBUILT } = await import("./sim/prebuilt.generated");
   return PREBUILT[id] ?? null;
 }
@@ -200,11 +237,108 @@ export const useStore = create<State>((set, get) => ({
   dockTab: "code",
   dockH: 320,
 
+  lesson: null,
+  lessonDone: {},
+  stepResult: null,
+  stepComplete: false,
+  hintOpen: false,
+  libraryOpen: false,
+  trace: [],
+
   set: (partial) => set(partial),
+
+
+  openLibrary: (libraryOpen) => set({ libraryOpen }),
+
+  startLesson: (id, step = 0) => {
+    const lesson = lessonById(id);
+    if (!lesson) return;
+    const fresh = step === 0;
+    sim.send({ t: "run", on: false });
+    sim.send({ t: "reset" });
+    sim.send({ t: "program", hex: null });
+    if (fresh) {
+      get().commit(structuredClone(lesson.start.doc));
+      set({ code: lesson.start.code, exampleId: bundledIdFor(lesson.start.code) });
+    }
+    set({
+      lesson: { id, step },
+      stepResult: null, stepComplete: false, hintOpen: false, libraryOpen: false, trace: [],
+      selection: null, wiring: null, snapshot: null, flow: {}, pressed: new Set(), running: false, serial: "",
+      hex: null, builtCode: null, build: { status: "idle", diagnostics: [] }, fitTick: get().fitTick + 1,
+      ...(lesson.track === "arduino" ? { dockOpen: true, dockTab: "code" as const } : {}),
+    });
+    saveLessons(get());
+    get().evaluateLesson();
+  },
+
+  exitLesson: () => {
+    set({ lesson: null, stepResult: null, stepComplete: false, trace: [] });
+    saveLessons(get());
+  },
+
+  lessonGo: (step) => {
+    const cur = get().lesson;
+    const lesson = cur && lessonById(cur.id);
+    if (!cur || !lesson) return;
+    const target = Math.max(0, Math.min(lesson.steps.length, step));
+    set({ lesson: { id: cur.id, step: target }, stepResult: null, stepComplete: false, hintOpen: false, trace: [] });
+    saveLessons(get());
+    get().evaluateLesson();
+  },
+
+  lessonShowMe: () => {
+    const cur = get().lesson;
+    const lesson = cur && lessonById(cur.id);
+    if (!cur || !lesson || cur.step >= lesson.steps.length) return;
+    const state = solutionChain(lesson)[cur.step + 1];
+    sim.send({ t: "run", on: false });
+    sim.send({ t: "reset" });
+    get().commit(structuredClone(state.doc));
+    const id = bundledIdFor(state.code);
+    set({
+      code: state.code, exampleId: id, running: false, snapshot: null, flow: {}, serial: "", trace: [], pressed: new Set(),
+      hex: null, builtCode: null, build: { status: "idle", diagnostics: [] }, selection: null, wiring: null,
+    });
+    sim.send({ t: "program", hex: null });
+    if (id) {
+      void bundledHex(id, state.code).then((hex) => {
+        if (!hex || get().exampleId !== id) return;
+        sim.send({ t: "program", hex });
+        set({ hex, builtCode: state.code, build: { status: "ok", diagnostics: [], bundled: true } });
+        get().evaluateLesson();
+      });
+    }
+    get().evaluateLesson();
+  },
+
+  evaluateLesson: () => {
+    const st = get();
+    const cur = st.lesson;
+    const lesson = cur && lessonById(cur.id);
+    if (!cur || !lesson || cur.step >= lesson.steps.length) return;
+    const step = lesson.steps[cur.step];
+    if (netsCache.doc !== st.doc) netsCache = { doc: st.doc, nets: buildNets(st.doc) };
+    const result = evaluateStep(
+      step,
+      { doc: st.doc, nets: netsCache.nets, snap: st.snapshot, code: st.code, build: st.build, builtCode: st.builtCode, serial: st.serial, running: st.running, trace: st.trace },
+      st.stepResult?.latched,
+    );
+    const prev = st.stepResult;
+    const same = prev && prev.done === result.done && prev.passed.every((p, i) => p === result.passed[i]) && prev.latched.every((p, i) => p === result.latched[i]);
+    if (same && (st.stepComplete || !result.done)) return;
+    const complete = st.stepComplete || result.done;
+    set({ stepResult: result, stepComplete: complete });
+    if (complete && !(st.lessonDone[lesson.id] ?? []).includes(cur.step)) {
+      set({ lessonDone: { ...st.lessonDone, [lesson.id]: [...(st.lessonDone[lesson.id] ?? []), cur.step] } });
+      saveLessons(get());
+    }
+  },
 
   setCode: (code) => {
     const { exampleId, builtCode, hex, build } = get();
-    const next = { code, exampleId: exampleId && code === EXAMPLE_SKETCHES.get(exampleId) ? exampleId : null };
+    void exampleId;
+    const next = { code, exampleId: bundledIdFor(code) };
     set(next);
     saveSketch({ ...next, builtCode, hex, build: build.status === "ok" ? build : undefined });
   },
@@ -281,6 +415,7 @@ export const useStore = create<State>((set, get) => ({
 
   loadExample: (example) => {
     const { doc, sketch } = example;
+    if (get().lesson) get().exitLesson();
     sim.send({ t: "run", on: false });
     sim.send({ t: "reset" });
     sim.send({ t: "program", hex: null });
@@ -319,6 +454,17 @@ export const useStore = create<State>((set, get) => ({
     } catch {
       /* ignore damaged saved data */
     }
+    try {
+      const raw = localStorage.getItem(LESSON_KEY);
+      if (raw) {
+        const k = JSON.parse(raw) as { done?: Record<string, number[]>; current?: { id: string; step: number } | null };
+        const cur = k.current && lessonById(k.current.id) ? k.current : null;
+        set({ lessonDone: k.done ?? {}, lesson: cur });
+        if (cur) setTimeout(() => get().evaluateLesson(), 0);
+      }
+    } catch {
+      /* ignore damaged saved data */
+    }
     sim.send({ t: "doc", doc: get().doc });
   },
 
@@ -333,8 +479,19 @@ export const useStore = create<State>((set, get) => ({
       const rate = 10 + 80 * Math.sqrt(Math.min(1, mag / 0.1));
       flow[id] = ((flow[id] ?? 0) + Math.sign(amps) * rate * dt) % 900;
     }
+    let trace = st.trace;
+    if (st.lesson) {
+      const frame: Frame = {
+        t: snapshot.time,
+        pressed: st.pressed.size > 0,
+        parts: Object.fromEntries(
+          Object.entries(snapshot.parts).map(([id, p]) => [id, { i: p.i, v: p.v, glow: p.glow, on: p.on, deg: p.deg, l: p.uno?.l, burned: p.burned }]),
+        ),
+      };
+      trace = [...st.trace.slice(-359), frame];
+    }
     set({
-      snapshot, flow, speed,
+      snapshot, flow, speed, trace,
       ...(serial ? { serial: (st.serial + serial).slice(-SERIAL_LIMIT) } : {}),
     });
     buzz(st.sound && Object.values(snapshot.parts).some((p) => p.sounding));
