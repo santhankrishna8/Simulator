@@ -12,6 +12,7 @@ import { lessonById, solutionChain } from "./lessons";
 import { buildNets, type Nets } from "./lessons/nets";
 import type { Frame } from "./lessons/types";
 import { describeBench } from "./tutor/describe";
+import type { Project } from "./share/sanitize";
 import {
   collides, holeMap, occupiedHoles, partsOnBoard, refPos, WIRE_COLORS,
   type Doc, type Part, type PinRef, type Rot,
@@ -107,6 +108,14 @@ interface State {
   askTutor(question: string): Promise<void>;
   stopTutor(): void;
   clearTutor(): void;
+
+  /* ----- sharing ----- */
+  shareOpen: boolean;
+  /** A project from a link or file, waiting for the person to say yes. */
+  incoming: { project: Project; source: "link" | "file"; dropped: string[] } | null;
+  openShare(open: boolean): void;
+  offerProject(incoming: { project: Project; source: "link" | "file"; dropped: string[] } | null): void;
+  acceptIncoming(): void;
 
   openLibrary(open: boolean): void;
   startLesson(id: string, step?: number): void;
@@ -257,6 +266,8 @@ export const useStore = create<State>((set, get) => ({
   dockTab: "code",
   dockH: 320,
 
+  shareOpen: false,
+  incoming: null,
   tutorOpen: false,
   tutorMessages: [],
   tutorBusy: false,
@@ -273,6 +284,38 @@ export const useStore = create<State>((set, get) => ({
   set: (partial) => set(partial),
 
 
+
+
+  openShare: (shareOpen) => set({ shareOpen }),
+  offerProject: (incoming) => set({ incoming, shareOpen: false }),
+
+  acceptIncoming: () => {
+    const inc = get().incoming;
+    if (!inc) return;
+    const { doc, code } = inc.project;
+    if (get().lesson) get().exitLesson();
+    sim.send({ t: "run", on: false });
+    sim.send({ t: "reset" });
+    sim.send({ t: "program", hex: null });
+    get().commit(structuredClone(doc));
+    const id = bundledIdFor(code);
+    set({
+      incoming: null, code, exampleId: id, selection: null, wiring: null, snapshot: null, flow: {}, pressed: new Set(), running: false, serial: "",
+      fitTick: get().fitTick + 1, hex: null, builtCode: null, build: { status: "idle", diagnostics: [] },
+      ...(doc.parts.some((p) => p.type === "uno") && code.trim() ? { dockOpen: true, dockTab: "code" as const } : {}),
+    });
+    saveSketch({ code, exampleId: id, builtCode: null, hex: null });
+    if (id) {
+      void bundledHex(id, code).then((hex) => {
+        if (!hex || get().exampleId !== id) return;
+        sim.send({ t: "program", hex });
+        const build: Build = { status: "ok", diagnostics: [], bundled: true };
+        set({ hex, builtCode: code, build });
+        saveSketch({ code, exampleId: id, builtCode: code, hex, build });
+      });
+    }
+    get().say(inc.source === "link" ? "Opened the shared project. Undo brings your old bench back." : "Opened your file. Undo brings your old bench back.");
+  },
 
   openTutor: (tutorOpen) => {
     set({ tutorOpen });

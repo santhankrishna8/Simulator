@@ -9,6 +9,7 @@ import Canvas from "./Canvas";
 import Drawer from "./Drawer";
 import Inspector from "./Inspector";
 import LessonLibrary from "./LessonLibrary";
+import ShareDialogs, { useShareLinks } from "./ShareDialogs";
 import Tutor from "./Tutor";
 import { GraphicsDefs } from "./PartGraphics";
 
@@ -107,6 +108,7 @@ function Toast() {
 export default function Workbench() {
   useSimLink();
   useLessonChecks();
+  useShareLinks();
   useShortcuts();
   const running = useStore((s) => s.running);
   const building = useStore((s) => s.build.status === "building");
@@ -119,7 +121,7 @@ export default function Workbench() {
   const danger = useStore((s) => s.snapshot?.warnings.filter((w) => w.level !== "info").length ?? 0);
   const lessonActive = useStore((s) => !!s.lesson);
   const tutorOpen = useStore((s) => s.tutorOpen);
-  const { set, undo, redo, toggleRun, resetSim, openLibrary, openTutor } = useStore.getState();
+  const { set, undo, redo, toggleRun, resetSim, openLibrary, openTutor, openShare } = useStore.getState();
   const [sheet, setSheet] = useState<"parts" | "inspect" | "code" | null>(null);
 
   // On small screens, open the inspector when something gets selected, and
@@ -164,14 +166,21 @@ export default function Workbench() {
               <path d="M2 4.5L8 2l6 2.5L8 7z" fill="currentColor" />
               <path d="M4 7.5v3c0 1 1.8 2 4 2s4-1 4-2v-3L8 9.2z" fill="currentColor" opacity="0.7" />
             </svg>
-            Lessons
+            <span className="label">Lessons</span>
           </button>
           <button type="button" className={`btn tutor-btn${tutorOpen ? " is-on" : ""}`} aria-pressed={tutorOpen} onClick={() => openTutor(!tutorOpen)}>
             <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden>
               <path d="M8 1.5l1.4 3.6 3.6 1.4-3.6 1.4L8 11.5 6.6 7.9 3 6.5l3.6-1.4z" fill="currentColor" />
               <path d="M12.5 10.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z" fill="currentColor" opacity="0.7" />
             </svg>
-            Tutor
+            <span className="label">Tutor</span>
+          </button>
+          <button type="button" className="btn share-btn" onClick={() => openShare(true)} aria-label="Share this circuit">
+            <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden>
+              <circle cx="12" cy="3.5" r="2" fill="currentColor" /><circle cx="4" cy="8" r="2" fill="currentColor" /><circle cx="12" cy="12.5" r="2" fill="currentColor" />
+              <path d="M5.8 7l4.4-2.5M5.8 9l4.4 2.5" stroke="currentColor" strokeWidth="1.3" fill="none" />
+            </svg>
+            <span className="label">Share</span>
           </button>
           <span className="sep" />
           <button type="button" className="btn is-ghost" onClick={undo} disabled={!canUndo} title="Undo (Ctrl+Z)">Undo</button>
@@ -216,6 +225,7 @@ export default function Workbench() {
       </main>
       <Inspector />
       <LessonLibrary />
+      <ShareDialogs />
 
       <nav className="tabs" aria-label="Panels">
         <button type="button" aria-pressed={sheet === "parts"} onClick={() => toggleSheet("parts")}>Parts</button>

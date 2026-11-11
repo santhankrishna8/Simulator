@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
+import { useModal } from "./useModal";
 import { LESSONS } from "@/lessons";
 import type { Lesson } from "@/lessons/types";
 import { useStore } from "@/store";
@@ -42,26 +43,7 @@ export default function LessonLibrary() {
   const close = useStore((s) => s.openLibrary);
   const ref = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const previous = document.activeElement as HTMLElement | null;
-    ref.current?.querySelector<HTMLElement>("button")?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") close(false);
-      if (e.key === "Tab" && ref.current) {
-        const items = [...ref.current.querySelectorAll<HTMLElement>("button")];
-        if (!items.length) return;
-        const first = items[0], last = items[items.length - 1];
-        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      previous?.focus();
-    };
-  }, [open, close]);
+  useModal(ref, open, () => close(false));
 
   if (!open) return null;
   const groups: [string, string, Lesson[]][] = [
