@@ -98,6 +98,8 @@ function SerialMonitor() {
   );
 }
 
+let warmed = false;
+
 export default function Dock() {
   const tab = useStore((s) => s.dockTab);
   const height = useStore((s) => s.dockH);
@@ -106,6 +108,13 @@ export default function Dock() {
   const building = useStore((s) => s.build.status === "building");
   const unread = useStore((s) => s.serial.length > 0);
   const drag = useRef<{ y: number; h: number } | null>(null);
+
+  // Wake a sleeping compile service while the person reads or types. Once per visit.
+  useEffect(() => {
+    if (warmed) return;
+    warmed = true;
+    fetch("/api/compile").catch(() => {});
+  }, []);
 
   return (
     <section className="dock" style={{ "--dock-h": `${height}px` } as React.CSSProperties} aria-label="Code and serial monitor">

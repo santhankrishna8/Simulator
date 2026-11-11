@@ -20,6 +20,27 @@ const upstream = z.union([
 
 const json = (data: unknown, status = 200) => Response.json(data, { status, headers: { "cache-control": "no-store" } });
 
+/**
+ * Wake-up call. Free hosts put idle services to sleep; the Code panel calls this when it
+ * opens so the compiler is awake by the time someone presses Upload. Reveals nothing but
+ * whether a service is configured and answering.
+ */
+export async function GET() {
+  let url: string | undefined;
+  try {
+    url = env().COMPILE_SERVICE_URL;
+  } catch {
+    return json({ configured: false, up: false });
+  }
+  if (!url) return json({ configured: false, up: false });
+  try {
+    const res = await fetch(new URL("/health", url), { signal: AbortSignal.timeout(25_000), cache: "no-store" });
+    return json({ configured: true, up: res.ok });
+  } catch {
+    return json({ configured: true, up: false });
+  }
+}
+
 export async function POST(request: Request) {
   const parsed = body.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return json({ ok: false, kind: "bad-request", message: "Send a sketch of up to 60,000 characters." }, 400);
