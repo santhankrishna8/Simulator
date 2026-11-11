@@ -8,6 +8,7 @@ import { useStore } from "@/store";
 import Canvas from "./Canvas";
 import Drawer from "./Drawer";
 import Inspector from "./Inspector";
+import BuildGuide from "./BuildGuide";
 import LessonLibrary from "./LessonLibrary";
 import ShareDialogs, { useShareLinks } from "./ShareDialogs";
 import Tutor from "./Tutor";
@@ -226,6 +227,7 @@ export default function Workbench() {
       <Inspector />
       <LessonLibrary />
       <ShareDialogs />
+      <BuildGuide />
 
       <nav className="tabs" aria-label="Panels">
         <button type="button" aria-pressed={sheet === "parts"} onClick={() => toggleSheet("parts")}>Parts</button>

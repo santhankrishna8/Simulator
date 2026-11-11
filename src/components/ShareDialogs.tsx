@@ -13,7 +13,7 @@ function ShareDialog() {
   const doc = useStore((s) => s.doc);
   const code = useStore((s) => s.code);
   const hasBoard = doc.parts.some((p) => p.type === "uno");
-  const { openShare, offerProject, say } = useStore.getState();
+  const { openShare, offerProject, say, openGuide } = useStore.getState();
   const ref = useRef<HTMLDivElement>(null);
   const [link, setLink] = useState<string>("");
   const [copied, setCopied] = useState(false);
@@ -90,6 +90,12 @@ function ShareDialog() {
             </label>
           </div>
           {problem && <p className="share-error" role="alert">{problem}</p>}
+          <hr />
+          <h3 className="share-sub">Build it for real</h3>
+          <p className="muted">A printable shopping list, step-by-step placement and wiring with breadboard positions, and safety checks.</p>
+          <div className="share-actions">
+            <button type="button" className="btn" onClick={() => openGuide(true)}>Open the build guide</button>
+          </div>
         </div>
       </div>
     </div>

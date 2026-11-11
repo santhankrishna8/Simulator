@@ -111,6 +111,8 @@ interface State {
 
   /* ----- sharing ----- */
   shareOpen: boolean;
+  guideOpen: boolean;
+  openGuide(open: boolean): void;
   /** A project from a link or file, waiting for the person to say yes. */
   incoming: { project: Project; source: "link" | "file"; dropped: string[] } | null;
   openShare(open: boolean): void;
@@ -267,6 +269,7 @@ export const useStore = create<State>((set, get) => ({
   dockH: 320,
 
   shareOpen: false,
+  guideOpen: false,
   incoming: null,
   tutorOpen: false,
   tutorMessages: [],
@@ -287,6 +290,7 @@ export const useStore = create<State>((set, get) => ({
 
 
   openShare: (shareOpen) => set({ shareOpen }),
+  openGuide: (guideOpen) => set({ guideOpen, shareOpen: false }),
   offerProject: (incoming) => set({ incoming, shareOpen: false }),
 
   acceptIncoming: () => {

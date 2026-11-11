@@ -733,3 +733,37 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 28px; ma
   .tools .label { display: none; }
   .tools .btn.lessons-btn, .tools .btn.tutor-btn, .tools .btn.share-btn { padding: 0 9px; }
 }
+
+/* ---------- build guide ---------- */
+
+.share-sub { font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--accent-ink); margin: 4px 0 0; font-weight: 600; }
+.share-body hr { border: 0; border-top: 1px solid var(--line); margin: 6px 0 2px; width: 100%; }
+.modal.guide { width: min(900px, 100%); }
+.guide-body { gap: 4px; }
+.guide-body section { padding-top: 14px; }
+.diagram { width: 100%; max-height: 360px; background: var(--mat); border-radius: var(--radius); border: 1px solid var(--line); }
+.guide-table { width: 100%; border-collapse: collapse; font-size: 14.5px; margin-top: 8px; }
+.guide-table th { text-align: left; font-size: 12px; color: var(--ink-3); font-weight: 500; padding: 4px 8px 4px 0; letter-spacing: 0.02em; }
+.guide-table td { padding: 7px 10px 7px 0; border-top: 1px solid var(--line); vertical-align: top; }
+.guide-table td:first-child { white-space: nowrap; }
+.guide-table td:nth-child(2) { color: var(--ink-2); }
+.box { display: inline-block; width: 12px; height: 12px; border: 1.5px solid var(--ink-3); border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.guide-code { background: #14232a; color: #e6f0f2; border-radius: 8px; padding: 12px 14px; overflow-x: auto; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.5; margin: 8px 0 0; }
+.guide-checks { list-style: disc; padding-left: 20px; display: grid; gap: 6px; margin-top: 8px; color: var(--ink-2); font-size: 14.5px; }
+.print-only { display: none; }
+
+@media print {
+  @page { margin: 14mm; }
+  html, body { height: auto !important; overflow: visible !important; background: #fff; }
+  /* The guide sits inside the app container, so hide the app's other panels rather than the container. */
+  .bench { display: block !important; height: auto !important; }
+  .bench > *:not(.guide-back):not(svg) { display: none !important; }
+  .no-print { display: none !important; }
+  .modal-back.guide-back { position: static; display: block; background: none; padding: 0; animation: none; }
+  .modal.guide { box-shadow: none; max-height: none; width: 100%; border-radius: 0; display: block; }
+  .guide-body { overflow: visible; padding: 0; }
+  .print-only { display: block; font-size: 26px; margin: 0 0 8px; }
+  .guide-body section { break-inside: avoid; }
+  .diagram { max-height: 300px; border-color: #ccc; }
+  .guide-code { background: #f4f4f4; color: #111; border: 1px solid #ccc; white-space: pre-wrap; }
+}
