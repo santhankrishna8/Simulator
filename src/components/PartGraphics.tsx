@@ -616,6 +616,109 @@ function Uno({ part, live }: GProps) {
   );
 }
 
+
+/* ---------- Transistor, RGB LED, 7-segment, relay ---------- */
+
+function Npn({ live }: GProps) {
+  const burned = live?.burned;
+  const body = "M0.5 -10 V-24 A9.5 9.5 0 0 1 19.5 -24 V-10 Z";
+  return (
+    <g>
+      <Lead d="M0 0 V-10" />
+      <Lead d="M10 0 V-10" />
+      <Lead d="M20 0 V-10" />
+      <path d={body} fill={burned ? "#3b3631" : "#1d1f21"} />
+      <path d="M0.5 -10 V-24 A9.5 9.5 0 0 1 4 -31" fill="none" stroke="#fff" strokeOpacity={0.18} strokeWidth={1.2} />
+      <text x={10} y={-17} fontSize={4.4} textAnchor="middle" fill="#d3d8dc" fontFamily="var(--font-mono)">2N2222</text>
+      <text x={0} y={-3.5} fontSize={3.6} fill="#6b7175" fontFamily="var(--font-mono)" textAnchor="middle">E</text>
+      <text x={10} y={-3.5} fontSize={3.6} fill="#6b7175" fontFamily="var(--font-mono)" textAnchor="middle">B</text>
+      <text x={20} y={-3.5} fontSize={3.6} fill="#6b7175" fontFamily="var(--font-mono)" textAnchor="middle">C</text>
+      <path d={body} fill="url(#g-shade-h)" opacity={0.6} />
+      {burned && <path d="M5 -33 l3 6 l-3 4 l5 4 M14 -28 l-2 5" stroke="#8a8f94" strokeWidth={0.8} fill="none" />}
+    </g>
+  );
+}
+
+function RgbLed({ live }: GProps) {
+  const ch = live?.channels ?? { r: 0, g: 0, b: 0 };
+  const mix = (v: number) => Math.round(Math.min(255, 70 + v * 185));
+  const lit = Math.max(ch.r, ch.g, ch.b);
+  const color = lit > 0.02 ? `rgb(${mix(ch.r)},${mix(ch.g)},${mix(ch.b)})` : "#dfe3e6";
+  const dome = "M-3 -16 V-31 A18 18 0 0 1 33 -31 V-16 Z";
+  return (
+    <g>
+      {[0, 10, 20, 30].map((x) => <Lead key={x} d={`M${x} 0 V-16`} />)}
+      {lit > 0.02 && <circle cx={15} cy={-30} r={22 + lit * 22} fill={color} opacity={0.18 + lit * 0.3} />}
+      <rect x={-5} y={-19} width={40} height={3.4} rx={1.2} fill="#c9ced2" />
+      <path d={dome} fill={color} opacity={lit > 0.02 ? 0.92 : 0.7} />
+      <path d="M0 -16 V-26 M10 -16 V-24 M20 -16 V-26 M30 -16 V-24" stroke="#000" strokeOpacity={0.22} strokeWidth={1.2} />
+      {lit > 0.3 && <ellipse cx={15} cy={-27} rx={7 * lit} ry={8 * lit} fill="#fff" opacity={lit * 0.7} />}
+      <path d={dome} fill="url(#g-dome)" />
+      {["R", "−", "G", "B"].map((t, i) => (
+        <text key={i} x={i * 10} y={-4} fontSize={4.4} textAnchor="middle" fill="#6b7175" fontFamily="var(--font-mono)">{t}</text>
+      ))}
+    </g>
+  );
+}
+
+const SEG_SHAPES: Record<string, { x: number; y: number; w: number; h: number }> = {
+  a: { x: 11, y: -58, w: 18, h: 4.6 },
+  b: { x: 29, y: -54.4, w: 4.6, h: 18 },
+  c: { x: 29, y: -32, w: 4.6, h: 18 },
+  d: { x: 11, y: -14, w: 18, h: 4.6 },
+  e: { x: 6.4, y: -32, w: 4.6, h: 18 },
+  f: { x: 6.4, y: -54.4, w: 4.6, h: 18 },
+  g: { x: 11, y: -36, w: 18, h: 4.6 },
+};
+
+function SevenSeg({ live }: GProps) {
+  const ch = live?.channels ?? {};
+  return (
+    <g>
+      {[0, 10, 20, 30, 40].flatMap((x) => [
+        <Lead key={`b${x}`} d={`M${x} 0 V-6`} />,
+        <Lead key={`t${x}`} d={`M${x} -60 V-54`} />,
+      ])}
+      <rect x={-6} y={-69} width={52} height={78 - 8} rx={2} fill="#17191b" />
+      <rect x={-6} y={-69} width={52} height={70} rx={2} fill="url(#g-shade-v)" opacity={0.5} />
+      <g transform="skewX(-5) translate(10 0)">
+        {Object.entries(SEG_SHAPES).map(([k, g]) => {
+          const v = ch[k] ?? 0;
+          return (
+            <g key={k}>
+              {v > 0.05 && <rect x={g.x - 2} y={g.y - 2} width={g.w + 4} height={g.h + 4} rx={3} fill="#ff3b30" opacity={v * 0.35} />}
+              <rect x={g.x} y={g.y} width={g.w} height={g.h} rx={1.6} fill={v > 0.05 ? `rgb(255,${Math.round(70 - v * 30)},${Math.round(60 - v * 30)})` : "#3a2a2a"} />
+            </g>
+          );
+        })}
+        <circle cx={38} cy={-12} r={2.6} fill={(ch.dp ?? 0) > 0.05 ? "#ff3b30" : "#3a2a2a"} />
+      </g>
+      <text x={20} y={4.6} fontSize={3.6} textAnchor="middle" fill="#6b7175" fontFamily="var(--font-mono)">E D − C DP</text>
+      <text x={20} y={-62.6} fontSize={3.6} textAnchor="middle" fill="#6b7175" fontFamily="var(--font-mono)">G F − A B</text>
+    </g>
+  );
+}
+
+function Relay({ live }: GProps) {
+  const on = !!live?.on;
+  return (
+    <g>
+      {[0, 20, 50, 70, 90].map((x) => <Lead key={x} d={`M${x} 0 V-8`} />)}
+      <rect x={-8} y={-66} width={106} height={58} rx={3} fill="#1d4f9c" />
+      <rect x={-8} y={-66} width={106} height={58} rx={3} fill="url(#g-shade-v)" />
+      <rect x={-3} y={-61} width={96} height={48} rx={2} fill="none" stroke="#fff" strokeOpacity={0.25} strokeWidth={0.7} />
+      <text x={45} y={-44} fontSize={7.4} textAnchor="middle" fill="#eef3fb" fontWeight={600}>SRD-05VDC-SL-C</text>
+      <text x={45} y={-34} fontSize={4.6} textAnchor="middle" fill="#cfdcf1" fontFamily="var(--font-mono)">10A 250VAC · 10A 30VDC</text>
+      <text x={45} y={-25} fontSize={4.6} textAnchor="middle" fill="#cfdcf1" fontFamily="var(--font-mono)">COIL 5 V · 70 Ω</text>
+      <circle cx={88} cy={-57} r={3.4} fill={on ? "#ffb020" : "#315f9f"} />
+      {on && <circle cx={88} cy={-57} r={9} fill="#ffb020" opacity={0.3} />}
+      {[["COIL", 0], ["COIL", 20], ["COM", 50], ["NC", 70], ["NO", 90]].map(([t, x]) => (
+        <text key={`${t}${x}`} x={Number(x)} y={-1.4} fontSize={3.8} textAnchor="middle" fill="#6b7175" fontFamily="var(--font-mono)">{t}</text>
+      ))}
+    </g>
+  );
+}
+
 /* ---------- Dispatcher ---------- */
 
 interface GProps {
@@ -627,6 +730,10 @@ export function PartGraphic({ part, live }: GProps) {
   switch (part.type) {
     case "breadboard": return <Breadboard />;
     case "uno": return <Uno part={part} live={live} />;
+    case "npn": return <Npn part={part} live={live} />;
+    case "rgbled": return <RgbLed part={part} live={live} />;
+    case "sevenseg": return <SevenSeg part={part} live={live} />;
+    case "relay": return <Relay part={part} live={live} />;
     case "battery9v": return <Battery9V />;
     case "batteryAA2": return <AAHolder cells={2} />;
     case "batteryAA4": return <AAHolder cells={4} />;

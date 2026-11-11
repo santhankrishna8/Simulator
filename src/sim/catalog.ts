@@ -6,6 +6,10 @@
 export type PartType =
   | "breadboard"
   | "uno"
+  | "npn"
+  | "rgbled"
+  | "sevenseg"
+  | "relay"
   | "battery9v"
   | "batteryAA2"
   | "batteryAA4"
@@ -198,6 +202,92 @@ const defs: PartDef[] = [
         "The 14 digital pins (D0 to D13) can each be an input or an output. A0 to A5 read voltages from 0 to 5 V as numbers 0 to 1023, and can also be used as digital pins. Connect GND to your circuit's ground, or nothing works.",
       limits:
         "Each pin can supply 20 mA comfortably and 40 mA at the absolute most. The 5V pin shares the USB cable's 500 mA. With external power, feed 7 to 12 V into VIN, or exactly 5 V into the 5V pin.",
+    },
+  },
+  {
+    type: "npn",
+    name: "NPN transistor",
+    category: "Basics",
+    blurb: "2N2222A, a current-controlled switch",
+    pins: [
+      { id: "e", x: 0, y: 0, label: "Emitter" },
+      { id: "b", x: 1, y: 0, label: "Base" },
+      { id: "c", x: 2, y: 0, label: "Collector" },
+    ],
+    box: { x: -1, y: -3.4, w: 4, h: 3.8 },
+    defaults: {},
+    props: [],
+    learn: {
+      what: "A small current into the base lets a much larger current flow from the collector to the emitter. Used hard, it is a switch: a pin that can only give 20 mA can control a motor or a relay.",
+      wiring: "With the flat side facing you the legs are emitter, base, collector. Send the load's current in at the collector and out of the emitter to ground. Put a resistor (about 1 kΩ) between the controlling pin and the base.",
+      limits: "Up to 800 mA and 40 V, and about 0.6 W of heat. It switches on once the base reaches about 0.7 V above the emitter. Switching a relay or motor coil off creates a voltage spike, so put a diode across the coil.",
+    },
+  },
+  {
+    type: "rgbled",
+    name: "RGB LED",
+    category: "Output",
+    blurb: "Common cathode, red + green + blue",
+    pins: [
+      { id: "r", x: 0, y: 0, label: "Red anode" },
+      { id: "k", x: 1, y: 0, label: "Common cathode (longest leg)" },
+      { id: "g", x: 2, y: 0, label: "Green anode" },
+      { id: "b", x: 3, y: 0, label: "Blue anode" },
+    ],
+    box: { x: -1, y: -4.6, w: 5, h: 5.2 },
+    defaults: {},
+    props: [],
+    learn: {
+      what: "Three LEDs in one package that share a cathode. Mixing red, green and blue light at different brightnesses makes any colour.",
+      wiring: "The longest leg is the shared cathode: connect it to ground. Each of the other three legs needs its own resistor to its own pin. Use analogWrite on three PWM pins to mix colours.",
+      limits: "Red needs about 2 V, but green and blue need about 3 V, so with the same resistor they glow differently. About 20 mA per colour.",
+    },
+  },
+  {
+    type: "sevenseg",
+    name: "7-segment display",
+    category: "Output",
+    blurb: "One digit, common cathode",
+    pins: [
+      { id: "e", x: 0, y: 0, label: "Segment E" },
+      { id: "d", x: 1, y: 0, label: "Segment D" },
+      { id: "com1", x: 2, y: 0, label: "Common (−)" },
+      { id: "c", x: 3, y: 0, label: "Segment C" },
+      { id: "dp", x: 4, y: 0, label: "Decimal point" },
+      { id: "g", x: 0, y: -6, label: "Segment G" },
+      { id: "f", x: 1, y: -6, label: "Segment F" },
+      { id: "com2", x: 2, y: -6, label: "Common (−)" },
+      { id: "a", x: 3, y: -6, label: "Segment A" },
+      { id: "b", x: 4, y: -6, label: "Segment B" },
+    ],
+    box: { x: -1.4, y: -7.2, w: 7.2, h: 8 },
+    defaults: {},
+    props: [],
+    learn: {
+      what: "Eight LEDs (seven bars and a dot) in one package. Light the right bars to show a digit.",
+      wiring: "Either centre pin is the shared cathode: connect it to ground. Each segment needs its own resistor (220 Ω to 330 Ω) to its own pin. Place it across the centre gap of the breadboard.",
+      limits: "Each segment is an LED: about 2 V and 10 to 20 mA. Eight segments lit at once can add up to more than an Uno should supply, so use resistors of 330 Ω or more.",
+    },
+  },
+  {
+    type: "relay",
+    name: "Relay",
+    category: "Output",
+    blurb: "5 V coil, switches a separate circuit",
+    pins: [
+      { id: "coila", x: 0, y: 0, label: "Coil" },
+      { id: "coilb", x: 2, y: 0, label: "Coil" },
+      { id: "com", x: 5, y: 0, label: "Common" },
+      { id: "nc", x: 7, y: 0, label: "Normally closed" },
+      { id: "no", x: 9, y: 0, label: "Normally open" },
+    ],
+    box: { x: -1, y: -6.8, w: 12, h: 7.2 },
+    defaults: {},
+    props: [],
+    learn: {
+      what: "An electromagnet that moves a switch. The coil circuit and the contact circuit are separate, so a small signal can switch a big or high-voltage load safely.",
+      wiring: "Drive the coil through a transistor, as a microcontroller pin cannot supply 70 mA. Put a diode across the coil, stripe toward the positive side. The contacts: common joins normally open when the coil is on, and normally closed when it is off.",
+      limits: "The coil is 70 Ω and needs 5 V (about 70 mA). It pulls in above about 3.7 V. When the coil switches off it produces a large voltage spike that destroys an unprotected transistor.",
     },
   },
   {

@@ -136,6 +136,8 @@ export interface Runtime {
   burned: Set<string>;
   /** Motor back-EMF per part id, from the engine's mechanical model. */
   emf: Map<string, number>;
+  /** Relays whose coil is currently energised. */
+  relays: Set<string>;
 }
 
 /** Handles to the Uno's pin elements, so the engine can change them as the sketch runs. */
@@ -238,6 +240,7 @@ export function compile(doc: Doc, rt: Runtime): Compiled {
     union(`${p.id}.a5`, `${p.id}.scl`);
     union(`${p.id}.5v`, `${p.id}.ioref`);
   }
+  for (const p of doc.parts) if (p.type === "sevenseg") union(`${p.id}.com1`, `${p.id}.com2`);
 
   // Ground is the Uno's GND if there is one, otherwise the first battery's negative terminal.
   const board = doc.parts.find((p) => p.type === "uno");
@@ -323,6 +326,37 @@ export function compile(doc: Doc, rt: Runtime): Compiled {
       case "capacitor":
         elems.push({ k: "C", a: N(id, "pos"), b: N(id, "neg"), c: Math.max(1e-12, Number(p.props.farads)), part: id });
         break;
+      case "npn":
+        if (!rt.burned.has(id)) elems.push({ k: "Q", c: N(id, "c"), b: N(id, "b"), e: N(id, "e"), is: 1e-14, bf: 200, br: 2, part: id });
+        break;
+      case "rgbled": {
+        const channels: [string, number][] = [["r", 1.9], ["g", 3.0], ["b", 3.0]];
+        for (const [ch, vf] of channels) {
+          if (rt.burned.has(`${id}:${ch}`)) continue;
+          const nvt = 2 * VT;
+          const mid = extra();
+          elems.push({ k: "D", a: N(id, ch), b: mid, is: satCurrent(vf, 0.02, nvt, 4), nvt, part: id, tag: ch });
+          elems.push({ k: "R", a: mid, b: N(id, "k"), r: 4, part: id, tag: "series" });
+        }
+        break;
+      }
+      case "sevenseg": {
+        for (const seg of ["a", "b", "c", "d", "e", "f", "g", "dp"]) {
+          if (rt.burned.has(`${id}:${seg}`)) continue;
+          const nvt = 2 * VT;
+          const mid = extra();
+          elems.push({ k: "D", a: N(id, seg), b: mid, is: satCurrent(2.0, 0.02, nvt, 4), nvt, part: id, tag: seg });
+          elems.push({ k: "R", a: mid, b: N(id, "com1"), r: 4, part: id, tag: "series" });
+        }
+        break;
+      }
+      case "relay": {
+        const mid = extra();
+        elems.push({ k: "R", a: N(id, "coila"), b: mid, r: 70, part: id });
+        elems.push({ k: "L", a: mid, b: N(id, "coilb"), l: 0.06, part: id });
+        elems.push({ k: "R", a: N(id, "com"), b: N(id, rt.relays.has(id) ? "no" : "nc"), r: 0.1, part: id, tag: "contact" });
+        break;
+      }
       case "button":
         elems.push({ k: "R", a: N(id, "a1"), b: N(id, "a2"), r: 0.01, part: id, tag: "link" });
         elems.push({ k: "R", a: N(id, "b1"), b: N(id, "b2"), r: 0.01, part: id, tag: "link" });

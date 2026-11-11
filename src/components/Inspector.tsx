@@ -146,6 +146,18 @@ function Readings({ part }: { part: Part }) {
   const live = useStore((s) => s.snapshot?.parts[part.id]);
   if (!live) return <p className="muted">Press Run to see live voltage and current.</p>;
   if (part.type === "uno") return <UnoPins part={part} />;
+  if (live.extra) {
+    return (
+      <dl className="readings">
+        {Object.entries(live.extra).map(([k, v]) => (
+          <div key={k}>
+            <dt>{k}</dt>
+            <dd>{v}</dd>
+          </div>
+        ))}
+      </dl>
+    );
+  }
   const rows: [string, string][] = [];
   const isBattery = part.type in BATTERIES;
   if (part.type === "meter") rows.push(["Reading", live.reading ?? "–"]);

@@ -14,7 +14,11 @@ export type Elem =
   /** Voltage source `v` with series resistance `r`; `a` is the positive side. */
   | { k: "V"; a: number; b: number; v: number; r: number; part: string; pin?: string }
   /** Shockley diode from `a` (anode) to `b` (cathode). */
-  | { k: "D"; a: number; b: number; is: number; nvt: number; part: string }
+  | { k: "D"; a: number; b: number; is: number; nvt: number; part: string; tag?: string }
+  /** Inductor; current flows from `a` to `b`. */
+  | { k: "L"; a: number; b: number; l: number; part: string }
+  /** NPN bipolar transistor (Ebers-Moll). `c`, `b` and `e` are collector, base and emitter nodes. */
+  | { k: "Q"; c: number; b: number; e: number; is: number; bf: number; br: number; part: string }
   /** Capacitor; `a` is the positive plate. */
   | { k: "C"; a: number; b: number; c: number; part: string };
 
@@ -22,14 +26,28 @@ export const WIRE_OHMS = 0.02;
 const GMIN = 1e-10;
 
 export interface SolveState {
-  /** Last diode junction voltage per element index (Newton starting point). */
+  /** Last diode junction voltage per element index (Newton starting point). For a transistor, the base-emitter voltage. */
   vd: Float64Array;
+  /** A transistor's base-collector junction voltage. */
+  vd2: Float64Array;
   /** Capacitor voltage per element index. */
   vc: Float64Array;
+  /** Inductor current per element index. */
+  il: Float64Array;
 }
 
 export function makeState(elems: Elem[]): SolveState {
-  return { vd: new Float64Array(elems.length), vc: new Float64Array(elems.length) };
+  const n = elems.length;
+  return { vd: new Float64Array(n), vd2: new Float64Array(n), vc: new Float64Array(n), il: new Float64Array(n) };
+}
+
+const VT = 0.02585;
+
+/** Collector and base currents (into the device) for given junction voltages. */
+export function bjtCurrents(e: { is: number; bf: number; br: number }, vbe: number, vbc: number) {
+  const fe = e.is * (Math.exp(Math.min(vbe / VT, 80)) - 1);
+  const fc = e.is * (Math.exp(Math.min(vbc / VT, 80)) - 1);
+  return { ic: fe - fc * (1 + 1 / e.br), ib: fe / e.bf + fc / e.br };
 }
 
 /** SPICE-style junction voltage limiting; keeps exp() from overflowing. */
@@ -131,7 +149,14 @@ export function solve(nodeCount: number, elems: Elem[], state: SolveState, dt: n
         stampI(I0, e.b, e.a, g * state.vc[idx]);
         break;
       }
+      case "L": {
+        const g = dt / e.l;
+        stampG(G0, e.a, e.b, g);
+        stampI(I0, e.a, e.b, state.il[idx]);
+        break;
+      }
       case "D":
+      case "Q":
         diodes.push(idx);
         break;
     }
@@ -140,44 +165,84 @@ export function solve(nodeCount: number, elems: Elem[], state: SolveState, dt: n
   const G = new Float64Array(n * n);
   const rhs = new Float64Array(n);
   const vd = diodes.map((idx) => state.vd[idx]);
+  const vd2 = diodes.map((idx) => state.vd2[idx]);
 
-  const maxIter = diodes.length ? 60 : 1;
+  /** Add `coef * v[node]` to the row of `row`'s node (skipping ground). */
+  const addTerm = (rowNode: number, colNode: number, coef: number) => {
+    if (rowNode > 0 && colNode > 0) G[(rowNode - 1) * n + (colNode - 1)] += coef;
+  };
+
+  const maxIter = diodes.length ? 80 : 1;
   for (let iter = 0; iter < maxIter; iter++) {
     G.set(G0);
     rhs.set(I0);
     diodes.forEach((idx, j) => {
-      const e = elems[idx] as Extract<Elem, { k: "D" }>;
-      const x = Math.min(vd[j] / e.nvt, 80);
-      const ex = Math.exp(x);
-      const id = e.is * (ex - 1);
-      const gd = (e.is / e.nvt) * ex + GMIN;
-      stampG(G, e.a, e.b, gd);
-      stampI(rhs, e.a, e.b, id - gd * vd[j]);
+      const e = elems[idx];
+      if (e.k === "D") {
+        const x = Math.min(vd[j] / e.nvt, 80);
+        const ex = Math.exp(x);
+        const id = e.is * (ex - 1);
+        const gd = (e.is / e.nvt) * ex + GMIN;
+        stampG(G, e.a, e.b, gd);
+        stampI(rhs, e.a, e.b, id - gd * vd[j]);
+      } else if (e.k === "Q") {
+        const vbe = vd[j], vbc = vd2[j];
+        const { ic, ib } = bjtCurrents(e, vbe, vbc);
+        const gbe = (e.is / VT) * Math.exp(Math.min(vbe / VT, 80)) + GMIN;
+        const gbc = (e.is / VT) * Math.exp(Math.min(vbc / VT, 80)) + GMIN;
+        // Terminal currents (into the device) and their slopes against Vbe and Vbc.
+        const rows = [
+          { node: e.c, i: ic, jbe: gbe, jbc: -gbc * (1 + 1 / e.br) },
+          { node: e.b, i: ib, jbe: gbe / e.bf, jbc: gbc / e.br },
+          { node: e.e, i: -(ic + ib), jbe: -(gbe + gbe / e.bf), jbc: gbc },
+        ];
+        for (const r of rows) {
+          // I = I0 + jbe (vb - ve - vbe0) + jbc (vb - vc - vbc0)
+          addTerm(r.node, e.b, r.jbe + r.jbc);
+          addTerm(r.node, e.e, -r.jbe);
+          addTerm(r.node, e.c, -r.jbc);
+          if (r.node > 0) rhs[r.node - 1] -= r.i - r.jbe * vbe - r.jbc * vbc;
+        }
+      }
     });
     if (!gauss(G, rhs, n)) break;
     for (let k = 0; k < n; k++) v[k + 1] = rhs[k];
 
     let converged = true;
     diodes.forEach((idx, j) => {
-      const e = elems[idx] as Extract<Elem, { k: "D" }>;
-      const raw = v[e.a] - v[e.b];
-      const vcrit = e.nvt * Math.log(e.nvt / (Math.SQRT2 * e.is));
-      const lim = pnjlim(raw, vd[j], e.nvt, vcrit);
-      if (Math.abs(lim - vd[j]) > 1e-6 + 1e-4 * Math.abs(lim)) converged = false;
-      vd[j] = lim;
+      const e = elems[idx];
+      if (e.k === "D") {
+        const raw = v[e.a] - v[e.b];
+        const vcrit = e.nvt * Math.log(e.nvt / (Math.SQRT2 * e.is));
+        const lim = pnjlim(raw, vd[j], e.nvt, vcrit);
+        if (Math.abs(lim - vd[j]) > 1e-6 + 1e-4 * Math.abs(lim)) converged = false;
+        vd[j] = lim;
+      } else if (e.k === "Q") {
+        const vcrit = VT * Math.log(VT / (Math.SQRT2 * e.is));
+        const be = pnjlim(v[e.b] - v[e.e], vd[j], VT, vcrit);
+        const bc = pnjlim(v[e.b] - v[e.c], vd2[j], VT, vcrit);
+        if (Math.abs(be - vd[j]) > 1e-6 + 1e-4 * Math.abs(be) || Math.abs(bc - vd2[j]) > 1e-6 + 1e-4 * Math.abs(bc)) converged = false;
+        vd[j] = be;
+        vd2[j] = bc;
+      }
     });
     if (converged) break;
   }
 
-  diodes.forEach((idx, j) => (state.vd[idx] = vd[j]));
+  diodes.forEach((idx, j) => {
+    state.vd[idx] = vd[j];
+    state.vd2[idx] = vd2[j];
+  });
   elems.forEach((e, idx) => {
     if (e.k === "C") state.vc[idx] = v[e.a] - v[e.b];
+    else if (e.k === "L") state.il[idx] += (dt / e.l) * (v[e.a] - v[e.b]);
   });
   return v;
 }
 
 /** Current through an element, flowing from `a` to `b` inside the element. */
 export function currentOf(e: Elem, idx: number, v: Float64Array, state: SolveState, dt: number, vcPrev: number): number {
+  if (e.k === "Q") return bjtCurrents(e, state.vd[idx], state.vd2[idx]).ic;
   const vab = v[e.a] - v[e.b];
   switch (e.k) {
     case "R":
@@ -191,5 +256,7 @@ export function currentOf(e: Elem, idx: number, v: Float64Array, state: SolveSta
       return e.is * (Math.exp(Math.min(state.vd[idx] / e.nvt, 80)) - 1);
     case "C":
       return (e.c / dt) * (vab - vcPrev);
+    case "L":
+      return state.il[idx];
   }
 }

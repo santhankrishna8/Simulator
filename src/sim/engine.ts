@@ -1,7 +1,7 @@
 import { BATTERIES, HOLE_BY_ID, formatSI } from "./catalog";
 import { CPU_HZ, Mcu, UNO_PIN_IDS, parseHex, type PinMode } from "./mcu";
 import { compile, type Compiled, type Doc, type PinRef, type Runtime, type UnoHandle } from "./model";
-import { currentOf, makeState, solve } from "./solver";
+import { bjtCurrents, currentOf, makeState, solve } from "./solver";
 
 export interface PartLive {
   /** Voltage across the part's main terminals. */
@@ -24,6 +24,12 @@ export interface PartLive {
   reading?: string;
   /** Arduino Uno state. */
   uno?: UnoLive;
+  /** Brightness 0..1 of each LED in a multi-LED part (RGB LED: r g b; 7-segment: a to g, dp). */
+  channels?: Record<string, number>;
+  /** Relay contacts changed over. */
+  on?: boolean;
+  /** Extra labelled readings for the inspector. */
+  extra?: Record<string, string>;
 }
 
 export interface UnoLive {
@@ -92,6 +98,10 @@ export class Engine {
   private usedMah = new Map<string, number>();
   private capV = new Map<string, number>();
   private diodeV = new Map<string, number>();
+  private coilI = new Map<string, number>();
+  private bjtV = new Map<string, [number, number]>();
+  private relays = new Set<string>();
+  private burnWhy = new Map<string, "spike" | "current" | "heat" | "reverse">();
 
   /* ----- the Uno's chip ----- */
   private program: Uint16Array | null = null;
@@ -225,26 +235,47 @@ export class Engine {
     this.usedMah.clear();
     this.capV.clear();
     this.diodeV.clear();
+    this.coilI.clear();
+    this.bjtV.clear();
+    this.relays.clear();
+    this.burnWhy.clear();
   }
 
-  /** Swap a burnt part for a fresh one. */
+  /** Swap a burnt part (or all burnt channels of a part) for a fresh one. */
   replace(partId: string) {
-    this.burned.delete(partId);
-    this.stress.delete(partId);
+    const mine = (k: string) => k === partId || k.startsWith(`${partId}:`);
+    for (const k of [...this.burned]) if (mine(k)) this.burned.delete(k);
+    for (const k of [...this.stress.keys()]) if (mine(k)) this.stress.delete(k);
     this.heat.delete(partId);
+    this.burnWhy.delete(partId);
+  }
+
+  /** Overcurrent wear for an LED: instant failure past 120 mA, gradual above 30 mA. */
+  private overstress(key: string, i: number, dt: number): boolean {
+    let st = this.stress.get(key) ?? 0;
+    if (i > 0.03) st += (i - 0.03) * dt;
+    else st = Math.max(0, st - 0.01 * dt);
+    this.stress.set(key, st);
+    return i > 0.12 || st > 0.06;
   }
 
   /** Advance the simulation by `seconds` of circuit time. */
   advance(doc: Doc, pressed: Set<string>, seconds: number): Snapshot {
     const emf = new Map<string, number>();
     this.omega.forEach((w, id) => emf.set(id, MOTOR_K * w));
-    const rt: Runtime = { pressed, burned: this.burned, emf };
+    const rt: Runtime = { pressed, burned: this.burned, emf, relays: this.relays };
     let c: Compiled = compile(doc, rt);
     let state = makeState(c.elems);
     const load = () => {
       c.elems.forEach((e, idx) => {
         if (e.k === "C") state.vc[idx] = this.capV.get(e.part) ?? 0;
-        if (e.k === "D") state.vd[idx] = this.diodeV.get(e.part) ?? 0;
+        else if (e.k === "D") state.vd[idx] = this.diodeV.get(`${e.part}:${e.tag ?? ""}`) ?? 0;
+        else if (e.k === "L") state.il[idx] = this.coilI.get(e.part) ?? 0;
+        else if (e.k === "Q") {
+          const [be, bc] = this.bjtV.get(e.part) ?? [0, 0];
+          state.vd[idx] = be;
+          state.vd2[idx] = bc;
+        }
       });
     };
     load();
@@ -253,6 +284,8 @@ export class Engine {
     const dt = seconds > 0 ? seconds / steps : DT;
     let v: Float64Array = new Float64Array(c.nodeCount);
     const iSum = new Map<string, number>();
+    const ibSum = new Map<string, number>();
+    const chanSum = new Map<string, Record<string, number>>();
     const pinSum: Record<string, number> = {};
     const wireI: Record<string, number> = {};
 
@@ -263,6 +296,7 @@ export class Engine {
       this.time += dt;
       if (c.uno) this.uV = { v5: v[c.uno.n5v], vin: v[c.uno.nVin], reset: v[c.uno.nReset] };
       let burnedNow = false;
+      const kicks: number[] = [];
 
       c.elems.forEach((e, idx) => {
         const i = currentOf(e, idx, v, state, dt, vcPrev[idx]);
@@ -275,6 +309,36 @@ export class Engine {
           pinSum[e.pin] = (pinSum[e.pin] ?? 0) - i;
           return;
         }
+        if (e.k === "Q") {
+          const id = e.part;
+          const { ic, ib } = bjtCurrents(e, state.vd[idx], state.vd2[idx]);
+          iSum.set(id, (iSum.get(id) ?? 0) + ic);
+          ibSum.set(id, (ibSum.get(id) ?? 0) + ib);
+          this.bjtV.set(id, [state.vd[idx], state.vd2[idx]]);
+          const vce = v[e.c] - v[e.e];
+          const watts = vce * ic + (v[e.b] - v[e.e]) * ib;
+          let h = this.heat.get(id) ?? 0;
+          if (watts > 0.6) h += (watts - 0.6) * dt;
+          else h = Math.max(0, h - 0.2 * dt);
+          this.heat.set(id, h);
+          const why = vce > 60 ? "spike" : ic > 1.5 ? "current" : h > 0.5 ? "heat" : v[e.b] - v[e.e] < -6 ? "reverse" : null;
+          if (why) {
+            this.burned.add(id);
+            this.burnWhy.set(id, why);
+            burnedNow = true;
+          }
+          return;
+        }
+        if (e.k === "L") {
+          // An inductor whose current collapses in one step has lost its path. In a real circuit
+          // the voltage would climb into the kilovolts until something broke down; the solver's
+          // time step hides the size of that spike, so detect the event itself.
+          const before = this.coilI.get(e.part) ?? 0;
+          const now = state.il[idx];
+          if (Math.abs(before) >= 0.005 && Math.abs(now) <= 0.2 * Math.abs(before)) kicks.push(Math.max(v[e.a], v[e.b]));
+          this.coilI.set(e.part, now);
+          return;
+        }
         if (e.k === "R" && e.tag) {
           if (e.tag !== "upper") return;
         }
@@ -283,18 +347,25 @@ export class Engine {
         const part = doc.parts.find((p) => p.id === id)!;
 
         if (e.k === "C") this.capV.set(id, state.vc[idx]);
-        if (e.k === "D") this.diodeV.set(id, state.vd[idx]);
+        if (e.k === "D") this.diodeV.set(`${id}:${e.tag ?? ""}`, state.vd[idx]);
 
-        if (part.type === "led") {
-          // Overcurrent stress: instant failure past 120 mA, slower above 30 mA.
-          let st = this.stress.get(id) ?? 0;
-          if (i > 0.03) st += (i - 0.03) * dt;
-          else st = Math.max(0, st - 0.01 * dt);
-          this.stress.set(id, st);
-          if (i > 0.12 || st > 0.06) {
+        if (e.k === "D" && e.tag && (part.type === "rgbled" || part.type === "sevenseg")) {
+          const ch = chanSum.get(id) ?? {};
+          ch[e.tag] = (ch[e.tag] ?? 0) + i;
+          chanSum.set(id, ch);
+          if (this.overstress(`${id}:${e.tag}`, i, dt)) {
+            this.burned.add(`${id}:${e.tag}`);
+            burnedNow = true;
+          }
+        } else if (part.type === "led") {
+          if (this.overstress(id, i, dt)) {
             this.burned.add(id);
             burnedNow = true;
           }
+        } else if (part.type === "relay" && e.k === "R") {
+          // The armature pulls in above about 3.7 V on the coil and lets go near 0.5 V.
+          if (Math.abs(i) > 0.05) this.relays.add(id);
+          else if (Math.abs(i) < 0.008) this.relays.delete(id);
         } else if (part.type === "resistor") {
           const p = e.k === "R" ? i * i * e.r : 0;
           let h = this.heat.get(id) ?? 0;
@@ -317,6 +388,17 @@ export class Engine {
           this.usedMah.set(id, (this.usedMah.get(id) ?? 0) + (Math.max(0, out) * dt * 1000) / 3600);
         }
       });
+
+      for (const top of kicks) {
+        for (const q of c.elems) {
+          if (q.k !== "Q" || this.burned.has(q.part)) continue;
+          if (Math.abs(v[q.c] - top) < 2 && v[q.c] - v[q.e] > 15) {
+            this.burned.add(q.part);
+            this.burnWhy.set(q.part, "spike");
+            burnedNow = true;
+          }
+        }
+      }
 
       if (c.uno) this.senseUno(c.uno, v, dt, c.nodeOf);
 
@@ -522,6 +604,96 @@ export class Engine {
               fix: "Lower the supply voltage.",
             });
           }
+          break;
+        }
+        case "npn": {
+          const vce = nv(id, "c") - nv(id, "e");
+          const vbe = nv(id, "b") - nv(id, "e");
+          const ic = burned ? 0 : i;
+          const ib = burned ? 0 : (ibSum.get(id) ?? 0) / steps;
+          const watts = Math.abs(vce * ic + vbe * ib);
+          const region = burned ? "Burnt out" : vbe < 0.5 ? "Off" : vce < 0.35 ? "Saturated (fully on)" : "Active (amplifying)";
+          parts[id] = {
+            v: vce, i: ic, p: watts, burned,
+            extra: {
+              "Collector current": formatSI(Math.abs(ic) < 1e-7 ? 0 : ic, "A"),
+              "Base current": formatSI(Math.abs(ib) < 1e-8 ? 0 : ib, "A"),
+              "Gain (Ic ÷ Ib)": ib > 2e-6 && ic > 0 ? (ic / ib).toFixed(0) : "–",
+              "Base-emitter": formatSI(vbe, "V"),
+              State: region,
+            },
+          };
+          const why = this.burnWhy.get(id);
+          if (burned) {
+            warnings.push({
+              id: `qburn-${id}`, level: "danger", part: id,
+              title: why === "spike" ? "Transistor destroyed by a voltage spike" : why === "current" ? "Transistor burnt out by too much current" : why === "reverse" ? "Transistor burnt out by reverse voltage" : "Transistor overheated",
+              why:
+                why === "spike"
+                  ? "When the transistor switched off, the coil (an inductor) tried to keep its current flowing and pushed the collector up to hundreds of volts. A 2N2222 survives 40 V."
+                  : why === "current"
+                    ? "More than 1.5 A flowed through it. It is rated for 800 mA."
+                    : why === "reverse"
+                      ? "More than 6 V was applied backwards across base and emitter."
+                      : "It dissipated well over 0.6 W for too long. In saturation the heat is Vce × Ic, so a large current through a half-on transistor gets hot.",
+              fix:
+                why === "spike"
+                  ? "Put a diode across the coil, stripe toward the positive side, so the current has a path when the transistor turns off. Then fit a new transistor."
+                  : why === "current"
+                    ? "Use a load that draws less current, or a bigger transistor. Then fit a new one."
+                    : "Fit a new transistor and check the wiring.",
+            });
+          } else if (ic > 0.8) {
+            warnings.push({ id: `qhot-${id}`, level: "warn", part: id, title: "Transistor over its current rating", why: `${formatSI(ic, "A")} is flowing and the 2N2222 is rated for 800 mA.`, fix: "Use a lighter load or a bigger transistor." });
+          } else if (watts > 0.6) {
+            warnings.push({ id: `qpower-${id}`, level: "warn", part: id, title: "Transistor is getting hot", why: `It is dissipating ${formatSI(watts, "W")}; the rating is about 0.6 W. A transistor is coolest fully on or fully off.`, fix: "Drive the base harder (a smaller base resistor) so it saturates." });
+          }
+          break;
+        }
+        case "rgbled":
+        case "sevenseg": {
+          const names = part.type === "rgbled" ? ["r", "g", "b"] : ["a", "b", "c", "d", "e", "f", "g", "dp"];
+          const sums = chanSum.get(id) ?? {};
+          const channels: Record<string, number> = {};
+          let total = 0;
+          const dead: string[] = [];
+          for (const ch of names) {
+            const dead1 = this.burned.has(`${id}:${ch}`);
+            if (dead1) dead.push(ch.toUpperCase());
+            const cur = dead1 ? 0 : Math.max(0, (sums[ch] ?? 0) / steps);
+            total += cur;
+            channels[ch] = Math.min(1, Math.pow(cur / 0.02, 0.6));
+            if (cur > 0.03) {
+              warnings.push({
+                id: `chhot-${id}-${ch}`, level: "warn", part: id,
+                title: `${part.type === "rgbled" ? ({ r: "Red", g: "Green", b: "Blue" } as Record<string, string>)[ch] : `Segment ${ch.toUpperCase()}`} is over its limit`,
+                why: `${formatSI(cur, "A")} is flowing; each LED here is rated for about 20 mA.`,
+                fix: "Increase that colour's series resistor.",
+              });
+            }
+          }
+          parts[id] = { v: 0, i: total, p: 0, channels, burned: dead.length > 0 };
+          if (dead.length) {
+            warnings.push({
+              id: `chburn-${id}`, level: "danger", part: id,
+              title: `${part.type === "rgbled" ? "RGB LED" : "Display"}: ${dead.join(", ")} burnt out`,
+              why: "Too much current flowed through it. Each colour or segment is a separate LED and needs its own series resistor.",
+              fix: "Fit a new part and add a 220 Ω to 330 Ω resistor in series with every anode.",
+            });
+          }
+          break;
+        }
+        case "relay": {
+          const on = this.relays.has(id);
+          const coil = nv(id, "coila") - nv(id, "coilb");
+          parts[id] = {
+            v: coil, i, p: Math.abs(coil * i), on,
+            extra: {
+              Coil: on ? "Energised" : Math.abs(i) > 0.008 ? "Charging" : "Off",
+              Contacts: on ? "Common joined to normally open" : "Common joined to normally closed",
+              "Coil current": formatSI(Math.abs(i) < 5e-6 ? 0 : Math.abs(i), "A"),
+            },
+          };
           break;
         }
         case "button":
