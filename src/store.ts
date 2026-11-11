@@ -11,6 +11,7 @@ import { evaluateStep, type StepResult } from "./lessons/evaluate";
 import { lessonById, solutionChain } from "./lessons";
 import { buildNets, type Nets } from "./lessons/nets";
 import type { Frame } from "./lessons/types";
+import { describeBench } from "./tutor/describe";
 import {
   collides, holeMap, occupiedHoles, partsOnBoard, refPos, WIRE_COLORS,
   type Doc, type Part, type PinRef, type Rot,
@@ -24,6 +25,13 @@ export interface Diagnostic {
   column: number;
   severity: "error" | "warning";
   message: string;
+}
+
+export interface TutorMessage {
+  role: "user" | "assistant";
+  content: string;
+  /** The reply is an error message, not an answer: it is not sent back as conversation history. */
+  error?: boolean;
 }
 
 export interface Build {
@@ -89,6 +97,17 @@ interface State {
   /** Recent frames, for goals about what happened (kept only during a lesson). */
   trace: Frame[];
 
+  /* ----- tutor ----- */
+  tutorOpen: boolean;
+  tutorMessages: TutorMessage[];
+  tutorBusy: boolean;
+  /** Whether the server has a key; null until asked. */
+  tutorConfigured: boolean | null;
+  openTutor(open: boolean): void;
+  askTutor(question: string): Promise<void>;
+  stopTutor(): void;
+  clearTutor(): void;
+
   openLibrary(open: boolean): void;
   startLesson(id: string, step?: number): void;
   exitLesson(): void;
@@ -130,7 +149,8 @@ const STORAGE_KEY = "simulator.doc.v1";
 const SKETCH_KEY = "simulator.sketch.v1";
 const DEFAULT_CODE = `void setup() {\n  // runs once\n}\n\nvoid loop() {\n  // runs forever\n}\n`;
 const LESSON_KEY = "simulator.lessons.v1";
-let netsCache: { doc: Doc | null; nets: Nets } = { doc: null, nets: { net: () => undefined, resolve: () => [] } };
+let netsCache: { doc: Doc | null; nets: Nets } = { doc: null, nets: { net: () => undefined, resolve: () => [], groups: () => [] } };
+let tutorAbort: AbortController | null = null;
 let idCounter = 0;
 const newId = (prefix: string) => `${prefix}${Date.now().toString(36)}${(idCounter++).toString(36)}`;
 
@@ -237,6 +257,11 @@ export const useStore = create<State>((set, get) => ({
   dockTab: "code",
   dockH: 320,
 
+  tutorOpen: false,
+  tutorMessages: [],
+  tutorBusy: false,
+  tutorConfigured: null,
+
   lesson: null,
   lessonDone: {},
   stepResult: null,
@@ -247,6 +272,78 @@ export const useStore = create<State>((set, get) => ({
 
   set: (partial) => set(partial),
 
+
+
+  openTutor: (tutorOpen) => {
+    set({ tutorOpen });
+    if (tutorOpen && get().tutorConfigured === null) {
+      fetch("/api/tutor")
+        .then((r) => r.json())
+        .then((d: { configured?: boolean }) => set({ tutorConfigured: !!d.configured }))
+        .catch(() => set({ tutorConfigured: false }));
+    }
+  },
+
+  stopTutor: () => tutorAbort?.abort(),
+
+  clearTutor: () => {
+    tutorAbort?.abort();
+    set({ tutorMessages: [], tutorBusy: false });
+  },
+
+  askTutor: async (question) => {
+    const q = question.trim();
+    const st = get();
+    if (!q || st.tutorBusy) return;
+
+    // What the tutor is told: the bench as it is right now, and where the learner is in a lesson.
+    const cur = st.lesson && lessonById(st.lesson.id);
+    const step = cur && st.lesson && st.lesson.step < cur.steps.length ? cur.steps[st.lesson.step] : null;
+    const bench = describeBench({
+      doc: st.doc, snap: st.snapshot, running: st.running, code: st.code, build: st.build, serial: st.serial,
+      lesson: cur && step && st.lesson
+        ? { lesson: cur.title, step: st.lesson.step + 1, steps: cur.steps.length, title: step.title, body: step.body, goals: step.goals.map((g, i) => ({ label: g.label, done: !!st.stepResult?.passed[i] })) }
+        : null,
+    });
+    const history = st.tutorMessages.filter((m) => !m.error && m.content).slice(-8).map((m) => ({ role: m.role, content: m.content.slice(0, 3900) }));
+
+    set({ tutorMessages: [...st.tutorMessages, { role: "user", content: q }, { role: "assistant", content: "" }], tutorBusy: true });
+    const write = (fn: (m: TutorMessage) => TutorMessage) =>
+      set((s) => ({ tutorMessages: s.tutorMessages.map((m, i) => (i === s.tutorMessages.length - 1 ? fn(m) : m)) }));
+
+    const controller = new AbortController();
+    tutorAbort = controller;
+    try {
+      const res = await fetch("/api/tutor", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ question: q, history, bench }),
+        signal: controller.signal,
+      });
+      if (!res.ok || !res.body) {
+        const data = (await res.json().catch(() => null)) as { error?: { kind?: string; message?: string } } | null;
+        if (data?.error?.kind === "unconfigured") set({ tutorConfigured: false });
+        write(() => ({ role: "assistant", content: data?.error?.message ?? "The tutor could not answer just now. Try again in a moment.", error: true }));
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const text = decoder.decode(value, { stream: true });
+        if (text) write((m) => ({ ...m, content: m.content + text }));
+      }
+      write((m) => (m.content ? m : { role: "assistant", content: "I do not have an answer for that. Try asking in a different way.", error: true }));
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") {
+        write((m) => (m.content ? { ...m, content: `${m.content}\n\n(The answer was cut off.)` } : { role: "assistant", content: "Could not reach the tutor. Check your connection and try again.", error: true }));
+      } else write((m) => (m.content ? m : { role: "assistant", content: "Stopped.", error: true }));
+    } finally {
+      if (tutorAbort === controller) tutorAbort = null;
+      set({ tutorBusy: false });
+    }
+  },
 
   openLibrary: (libraryOpen) => set({ libraryOpen }),
 

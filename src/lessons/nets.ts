@@ -12,6 +12,8 @@ export interface Nets {
   net(partId: string, pin: string): string | undefined;
   /** Net ids of every pin matching a spec, with the part each belongs to. */
   resolve(spec: PinSpec): { partId: string; pin: string; net: string }[];
+  /** Every net, with the part pins on it (breadboard holes are not listed) and whether it is a power rail. */
+  groups(): { net: string; pins: { partId: string; pin: string }[]; rail: "+" | "-" | null }[];
 }
 
 export function buildNets(doc: Doc): Nets {
@@ -72,6 +74,23 @@ export function buildNets(doc: Doc): Nets {
   };
 
   return {
+    groups() {
+      const plus = railRoots("+"), minus = railRoots("-");
+      const byNet = new Map<string, { net: string; pins: { partId: string; pin: string }[]; rail: "+" | "-" | null }>();
+      for (const part of doc.parts) {
+        if (part.type === "breadboard") continue;
+        for (const pin of CATALOG[part.type].pins) {
+          const net = find(`${part.id}.${pin.id}`);
+          let g = byNet.get(net);
+          if (!g) {
+            g = { net, pins: [], rail: plus.has(net) ? "+" : minus.has(net) ? "-" : null };
+            byNet.set(net, g);
+          }
+          g.pins.push({ partId: part.id, pin: pin.id });
+        }
+      }
+      return [...byNet.values()];
+    },
     net: (partId, pin) => (byId.has(partId) ? find(`${partId}.${pin}`) : undefined),
     resolve(spec) {
       if ("rail" in spec) return [...railRoots(spec.rail)].map((net) => ({ partId: "", pin: "", net }));

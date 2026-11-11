@@ -40,7 +40,17 @@ These devices need exact timing, which the circuit solver's 0.2 ms steps cannot 
 
 Lessons live in `src/lessons/`. To add one, write a `Lesson` in `src/lessons/content/`: the steps, their goals, and a model solution for each step. The tests then check it automatically.
 
-Planned next: an AI tutor that can see your circuit and code, OLED and I²C, and ESP32/IoT.
+**Phase 5: AI tutor**
+
+- A **Tutor** button opens a chat panel. It is told, in plain text, what is on your bench: the parts and their values, what is wired to what (including pins left unconnected), the live readings and warnings, your sketch, build errors and serial output, and in a lesson, the step you are on and which goals are done. Nothing about you is sent.
+- It is instructed to **teach rather than hand over answers**, to use only the facts it was given, and to keep answers short and in plain words.
+- Your project's text (code, serial output) is treated as **data, never instructions**, so a comment saying "ignore your rules" does nothing.
+- Answers stream in as they are written, with a Stop button. If no key is set, the panel says so instead of failing.
+- The OpenAI key stays on the server (`/api/tutor`). It is never sent to the browser, never echoed in an error, and a per-visitor limit slows runaway use.
+
+To turn it on, add `OPENAI_API_KEY` in Vercel's environment variables (and optionally `OPENAI_MODEL`, default `gpt-4o-mini`), then redeploy. Set a monthly spending limit on the key in the OpenAI dashboard: that is the real cost cap.
+
+Planned next: OLED and I²C, and ESP32/IoT.
 
 ## Run it
 
@@ -79,6 +89,8 @@ npm run lint
 | `src/sim/engine.ts` | Time stepping, part damage, warnings, the Uno's link to the circuit |
 | `src/sim/mcu.ts` | The ATmega328P (avr8js) and Intel HEX loading |
 | `src/sim/worker.ts` | Runs the engine off the main thread |
+| `src/tutor/` | What the tutor is told about the bench, and its rules |
+| `src/app/api/tutor/` | The tutor route: validates, calls OpenAI, streams the answer |
 | `src/lessons/` | Lesson content, goal checks, and how steps are evaluated |
 | `compile-service/` | Turns sketches into hex files (runs in Docker, not on Vercel) |
 | `src/app/api/compile/` | Validates requests and forwards them to the compile service |

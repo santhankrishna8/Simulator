@@ -9,6 +9,7 @@ import Canvas from "./Canvas";
 import Drawer from "./Drawer";
 import Inspector from "./Inspector";
 import LessonLibrary from "./LessonLibrary";
+import Tutor from "./Tutor";
 import { GraphicsDefs } from "./PartGraphics";
 
 const Dock = dynamic(() => import("./Dock"), { ssr: false });
@@ -117,7 +118,8 @@ export default function Workbench() {
   const dockOpen = useStore((s) => s.dockOpen);
   const danger = useStore((s) => s.snapshot?.warnings.filter((w) => w.level !== "info").length ?? 0);
   const lessonActive = useStore((s) => !!s.lesson);
-  const { set, undo, redo, toggleRun, resetSim, openLibrary } = useStore.getState();
+  const tutorOpen = useStore((s) => s.tutorOpen);
+  const { set, undo, redo, toggleRun, resetSim, openLibrary, openTutor } = useStore.getState();
   const [sheet, setSheet] = useState<"parts" | "inspect" | "code" | null>(null);
 
   // On small screens, open the inspector when something gets selected, and
@@ -164,6 +166,13 @@ export default function Workbench() {
             </svg>
             Lessons
           </button>
+          <button type="button" className={`btn tutor-btn${tutorOpen ? " is-on" : ""}`} aria-pressed={tutorOpen} onClick={() => openTutor(!tutorOpen)}>
+            <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden>
+              <path d="M8 1.5l1.4 3.6 3.6 1.4-3.6 1.4L8 11.5 6.6 7.9 3 6.5l3.6-1.4z" fill="currentColor" />
+              <path d="M12.5 10.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z" fill="currentColor" opacity="0.7" />
+            </svg>
+            Tutor
+          </button>
           <span className="sep" />
           <button type="button" className="btn is-ghost" onClick={undo} disabled={!canUndo} title="Undo (Ctrl+Z)">Undo</button>
           <button type="button" className="btn is-ghost" onClick={redo} disabled={!canRedo} title="Redo (Ctrl+Shift+Z)">Redo</button>
@@ -201,6 +210,7 @@ export default function Workbench() {
         <div className="stage-canvas">
           <Canvas />
           <Toast />
+          <Tutor />
         </div>
         {dockOpen && <Dock />}
       </main>
