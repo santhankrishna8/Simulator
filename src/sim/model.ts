@@ -138,7 +138,20 @@ export interface Runtime {
   emf: Map<string, number>;
 }
 
+/** Handles to the Uno's pin elements, so the engine can change them as the sketch runs. */
+export interface UnoHandle {
+  part: Part;
+  drivers: Map<string, Extract<Elem, { k: "V" }>>;
+  v5: Extract<Elem, { k: "V" }>;
+  v33: Extract<Elem, { k: "V" }>;
+  reset: Extract<Elem, { k: "V" }>;
+  n5v: number;
+  nVin: number;
+  nReset: number;
+}
+
 export interface Compiled {
+  uno?: UnoHandle;
   nodeCount: number;
   elems: Elem[];
   /** Node index for a part pin ("partId.pinId") or a breadboard strip ("boardId#strip"). */
@@ -216,9 +229,20 @@ export function compile(doc: Doc, rt: Runtime): Compiled {
     if (b) find(b);
   }
 
-  // Ground is the negative terminal of the first battery.
+  // A board's grounds, SDA/SCL and IOREF are joined on the PCB.
+  for (const p of doc.parts) {
+    if (p.type !== "uno") continue;
+    union(`${p.id}.gnd1`, `${p.id}.gnd2`);
+    union(`${p.id}.gnd1`, `${p.id}.gnd3`);
+    union(`${p.id}.a4`, `${p.id}.sda`);
+    union(`${p.id}.a5`, `${p.id}.scl`);
+    union(`${p.id}.5v`, `${p.id}.ioref`);
+  }
+
+  // Ground is the Uno's GND if there is one, otherwise the first battery's negative terminal.
+  const board = doc.parts.find((p) => p.type === "uno");
   const battery = doc.parts.find((p) => p.type in BATTERIES);
-  const groundRoot = battery ? find(`${battery.id}.neg`) : undefined;
+  const groundRoot = board ? find(`${board.id}.gnd1`) : battery ? find(`${battery.id}.neg`) : undefined;
 
   const index = new Map<string, number>();
   let count = 1;
@@ -237,6 +261,7 @@ export function compile(doc: Doc, rt: Runtime): Compiled {
   const extra = () => count++;
 
   const elems: Elem[] = [];
+  let unoHandle: UnoHandle | undefined;
   for (const w of doc.wires) {
     const a = keyOf(w.a);
     const b = keyOf(w.b);
@@ -249,6 +274,24 @@ export function compile(doc: Doc, rt: Runtime): Compiled {
     switch (p.type) {
       case "breadboard":
         break;
+      case "uno": {
+        if (unoHandle) break; // one board per circuit
+        const gnd = N(id, "gnd1");
+        const source = (pin: string): Extract<Elem, { k: "V" }> => {
+          const e: Extract<Elem, { k: "V" }> = { k: "V", a: N(id, pin), b: gnd, v: 0, r: 1e9, part: id, pin };
+          elems.push(e);
+          return e;
+        };
+        const drivers = new Map<string, Extract<Elem, { k: "V" }>>();
+        for (let i = 0; i < 14; i++) drivers.set(`d${i}`, source(`d${i}`));
+        for (let i = 0; i < 6; i++) drivers.set(`a${i}`, source(`a${i}`));
+        if (rt.pressed.has(id)) elems.push({ k: "R", a: N(id, "reset"), b: gnd, r: 0.05, part: id, tag: "reset" });
+        unoHandle = {
+          part: p, drivers, v5: source("5v"), v33: source("3v3"), reset: source("reset"),
+          n5v: N(id, "5v"), nVin: N(id, "vin"), nReset: N(id, "reset"),
+        };
+        break;
+      }
       case "battery9v":
       case "batteryAA2":
       case "batteryAA4":
@@ -317,6 +360,7 @@ export function compile(doc: Doc, rt: Runtime): Compiled {
   }
 
   return {
+    uno: unoHandle,
     nodeCount: count,
     elems,
     nodeOf,

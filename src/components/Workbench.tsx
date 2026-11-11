@@ -1,36 +1,33 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 import { buzz } from "@/audio";
-import { engine, loadSaved, useStore } from "@/store";
+import { sim } from "@/sim/client";
+import { useStore } from "@/store";
 import Canvas from "./Canvas";
 import Drawer from "./Drawer";
 import Inspector from "./Inspector";
 import { GraphicsDefs } from "./PartGraphics";
 
-function useSimLoop() {
+const Dock = dynamic(() => import("./Dock"), { ssr: false });
+
+/** Keep the worker in sync with the store, and the store in sync with the worker. */
+function useSimLink() {
   useEffect(() => {
-    let raf = 0;
-    let last = performance.now();
-    const tick = (now: number) => {
-      raf = requestAnimationFrame(tick);
-      const dt = Math.min(0.05, (now - last) / 1000);
-      last = now;
-      const st = useStore.getState();
-      if (!st.running) return;
-      const snapshot = engine.advance(st.doc, st.pressed, dt);
-      const flow = { ...st.flow };
-      for (const [id, amps] of Object.entries(snapshot.wires)) {
-        const mag = Math.abs(amps);
-        if (mag < 1e-6) continue;
-        const speed = 10 + 80 * Math.sqrt(Math.min(1, mag / 0.1));
-        flow[id] = ((flow[id] ?? 0) + Math.sign(amps) * speed * dt) % 900;
-      }
-      st.set({ snapshot, flow });
-      buzz(st.sound && Object.values(snapshot.parts).some((p) => p.sounding));
+    const st = useStore.getState();
+    sim.onFrame = (frame) => useStore.getState().applyFrame(frame);
+    sim.onError = (message) => {
+      const s = useStore.getState();
+      s.setRunning(false);
+      buzz(false);
+      s.say(`Simulation stopped: ${message}`);
     };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    st.restore();
+    return useStore.subscribe((s, prev) => {
+      if (s.doc !== prev.doc) sim.send({ t: "doc", doc: s.doc });
+      if (s.pressed !== prev.pressed) sim.send({ t: "pressed", ids: Array.from(s.pressed) });
+    });
   }, []);
 }
 
@@ -38,7 +35,7 @@ function useShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement;
-      if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable) return;
+      if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable || el.closest(".cm-editor")) return;
       const st = useStore.getState();
       const mod = e.metaKey || e.ctrlKey;
       if (e.key === "Escape") st.set({ wiring: null, selection: null, placing: null });
@@ -60,10 +57,13 @@ function useShortcuts() {
 
 function Clock() {
   const t = useStore((s) => s.snapshot?.time ?? 0);
+  const speed = useStore((s) => s.speed);
+  const running = useStore((s) => s.running);
   const m = Math.floor(t / 60);
   const s = (t % 60).toFixed(1).padStart(4, "0");
   return (
     <span className="clock" aria-label="Simulated time">
+      {running && speed < 0.9 && <em title="Your device cannot keep up, so simulated time runs slower than real time.">{Math.round(speed * 100)}% speed</em>}
       {String(m).padStart(2, "0")}:{s}
     </span>
   );
@@ -74,7 +74,7 @@ function Toast() {
   const set = useStore((s) => s.set);
   useEffect(() => {
     if (!toast) return;
-    const id = setTimeout(() => set({ toast: null }), 3200);
+    const id = setTimeout(() => set({ toast: null }), 3600);
     return () => clearTimeout(id);
   }, [toast, set]);
   return (
@@ -85,42 +85,42 @@ function Toast() {
 }
 
 export default function Workbench() {
-  useSimLoop();
+  useSimLink();
   useShortcuts();
   const running = useStore((s) => s.running);
+  const building = useStore((s) => s.build.status === "building");
   const hasSnapshot = useStore((s) => !!s.snapshot);
   const canUndo = useStore((s) => s.past.length > 0);
   const canRedo = useStore((s) => s.future.length > 0);
   const showFlow = useStore((s) => s.showFlow);
   const sound = useStore((s) => s.sound);
+  const dockOpen = useStore((s) => s.dockOpen);
   const danger = useStore((s) => s.snapshot?.warnings.filter((w) => w.level !== "info").length ?? 0);
-  const { set, undo, redo, setRunning, resetSim } = useStore.getState();
-  const [sheet, setSheet] = useState<"parts" | "inspect" | null>(null);
+  const { set, undo, redo, toggleRun, resetSim } = useStore.getState();
+  const [sheet, setSheet] = useState<"parts" | "inspect" | "code" | null>(null);
 
-  // Restore the last circuit after hydration so server and client markup match.
-  useEffect(() => {
-    const saved = loadSaved();
-    if (saved) useStore.setState((s) => ({ doc: saved, fitTick: s.fitTick + 1 }));
-  }, []);
-
-  // On small screens, open the inspector when something gets selected.
+  // On small screens, open the inspector when something gets selected, and
+  // clear the sheets when an example loads so the circuit is visible.
   useEffect(
     () =>
       useStore.subscribe((s, prev) => {
-        if (s.selection && s.selection !== prev.selection && window.matchMedia("(max-width: 900px)").matches) setSheet("inspect");
+        if (!window.matchMedia("(max-width: 900px)").matches) return;
+        if (s.fitTick !== prev.fitTick) {
+          setSheet(null);
+          useStore.setState({ dockOpen: false });
+        } else if (s.selection && s.selection !== prev.selection) setSheet("inspect");
       }),
     [],
   );
 
-  const toggleRun = () => {
-    if (running) {
-      setRunning(false);
-      buzz(false);
-    } else setRunning(true);
+  const toggleSheet = (name: "parts" | "inspect" | "code") => {
+    const next = sheet === name ? null : name;
+    setSheet(next);
+    set({ dockOpen: next === "code" });
   };
 
   return (
-    <div className="bench" data-sheet={sheet ?? "none"}>
+    <div className="bench" data-sheet={sheet ?? "none"} data-dock={dockOpen ? "open" : "closed"}>
       <GraphicsDefs />
       <header className="topbar">
         <div className="brand">
@@ -141,6 +141,10 @@ export default function Workbench() {
           <button type="button" className="btn is-ghost toggle" aria-pressed={sound} onClick={() => { set({ sound: !sound }); if (sound) buzz(false); }}>
             <i /> Sound
           </button>
+          <span className="sep" />
+          <button type="button" className="btn is-ghost toggle code-toggle" aria-pressed={dockOpen} onClick={() => set({ dockOpen: !dockOpen })}>
+            <i /> Code
+          </button>
         </div>
 
         <div className="run">
@@ -150,25 +154,29 @@ export default function Workbench() {
               Reset
             </button>
           )}
-          <button type="button" className={`btn is-primary run-btn${running ? " is-running" : ""}`} onClick={toggleRun}>
+          <button type="button" className={`btn is-primary run-btn${running ? " is-running" : ""}`} onClick={() => void toggleRun()} disabled={building}>
             <svg viewBox="0 0 12 12" width="11" height="11" aria-hidden>
               {running ? <path d="M2 1h3v10H2zM7 1h3v10H7z" fill="currentColor" /> : <path d="M2.5 1l8 5-8 5z" fill="currentColor" />}
             </svg>
-            {running ? "Pause" : "Run"}
+            {building ? "Building" : running ? "Pause" : "Run"}
           </button>
         </div>
       </header>
 
       <Drawer onPicked={() => setSheet(null)} />
       <main className="stage">
-        <Canvas />
-        <Toast />
+        <div className="stage-canvas">
+          <Canvas />
+          <Toast />
+        </div>
+        {dockOpen && <Dock />}
       </main>
       <Inspector />
 
       <nav className="tabs" aria-label="Panels">
-        <button type="button" aria-pressed={sheet === "parts"} onClick={() => setSheet(sheet === "parts" ? null : "parts")}>Parts</button>
-        <button type="button" aria-pressed={sheet === "inspect"} onClick={() => setSheet(sheet === "inspect" ? null : "inspect")}>
+        <button type="button" aria-pressed={sheet === "parts"} onClick={() => toggleSheet("parts")}>Parts</button>
+        <button type="button" aria-pressed={sheet === "code"} onClick={() => toggleSheet("code")}>Code</button>
+        <button type="button" aria-pressed={sheet === "inspect"} onClick={() => toggleSheet("inspect")}>
           Inspect{danger > 0 && <em>{danger}</em>}
         </button>
       </nav>

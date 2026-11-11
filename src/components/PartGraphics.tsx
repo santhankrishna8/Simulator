@@ -503,6 +503,119 @@ function Meter({ part, live }: GProps) {
   );
 }
 
+
+/* ---------- Arduino Uno ---------- */
+
+const TOP_LABELS: [number, string][] = [
+  [7, "SCL"], [8, "SDA"], [9, "AREF"], [10, "GND"], [11, "13"], [12, "12"], [13, "~11"], [14, "~10"], [15, "~9"], [16, "8"],
+  [18, "7"], [19, "~6"], [20, "~5"], [21, "4"], [22, "~3"], [23, "2"], [24, "TX 1"], [25, "RX 0"],
+];
+const BOTTOM_LABELS: [number, string][] = [
+  [10, "IOREF"], [11, "RESET"], [12, "3V3"], [13, "5V"], [14, "GND"], [15, "GND"], [16, "VIN"],
+  [18, "A0"], [19, "A1"], [20, "A2"], [21, "A3"], [22, "A4"], [23, "A5"],
+];
+
+function SmdLed({ x, y, on, color, label }: { x: number; y: number; on: boolean; color: string; label: string }) {
+  return (
+    <g>
+      {on && <circle cx={x + 4} cy={y + 2} r={9} fill={color} opacity={0.35} />}
+      <rect x={x} y={y} width={8} height={4} rx={0.8} fill={on ? color : "#8d9a8f"} stroke="#5b645d" strokeWidth={0.4} />
+      <text x={x + 12} y={y + 3.4} fontSize={3.8} fill="#d9eef0" fontFamily="var(--font-mono)">{label}</text>
+    </g>
+  );
+}
+
+function Uno({ part, live }: GProps) {
+  const u = live?.uno;
+  const pressed = useStore((s) => s.pressed.has(part.id));
+  const set = useStore((s) => s.setPressed);
+  const header = (x0: number, x1: number, y: number) => (
+    <rect x={x0 * U - 5} y={y - 7} width={(x1 - x0) * U + 10} height={14} rx={1.6} fill="#1a1c1e" />
+  );
+  const sockets = (xs: number[], y: number) =>
+    xs.map((x) => <rect key={`${x}-${y}`} x={x * U - 2.4} y={y - 2.4} width={4.8} height={4.8} rx={0.6} fill="#050607" stroke="#34383c" strokeWidth={0.5} />);
+  const range = (a: number, b: number) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
+  return (
+    <g>
+      {/* USB-B and power jack stick out past the board edge */}
+      <rect x={-24} y={36} width={62} height={48} rx={2} fill="url(#g-metal-h)" stroke="#6f767c" strokeWidth={0.7} />
+      <rect x={-24} y={44} width={44} height={32} rx={1.5} fill="#15171a" />
+      <rect x={-14} y={52} width={30} height={16} fill="#2a2d31" />
+      <rect x={-16} y={132} width={56} height={46} rx={2} fill="#202325" />
+      <circle cx={-3} cy={155} r={8} fill="#0c0d0e" />
+      <circle cx={-3} cy={155} r={2.6} fill="#555b61" />
+
+      <rect x={0} y={0} width={270} height={210} rx={7} fill="#0e7a84" />
+      <rect x={1.2} y={1.2} width={267.6} height={207.6} rx={6} fill="none" stroke="#fff" strokeOpacity={0.14} />
+      {[[55, 10], [60, 200], [260, 30], [260, 140]].map(([x, y]) => (
+        <g key={`${x}-${y}`}>
+          <circle cx={x} cy={y} r={5.2} fill="#d9eef0" opacity={0.85} />
+          <circle cx={x} cy={y} r={3.4} fill="#0a4d54" />
+        </g>
+      ))}
+
+      {/* chips */}
+      <rect x={60} y={64} width={26} height={26} rx={1.5} fill="#1b1d1f" />
+      <circle cx={65} cy={69} r={1.4} fill="#4a4f54" />
+      <rect x={104} y={124} width={132} height={32} rx={2} fill="#1b1d1f" />
+      {range(0, 13).flatMap((i) => [
+        <rect key={`t${i}`} x={108 + i * 9} y={120} width={3} height={4} fill="#b4b8bc" />,
+        <rect key={`b${i}`} x={108 + i * 9} y={156} width={3} height={4} fill="#b4b8bc" />,
+      ])}
+      <circle cx={112} cy={133} r={2.2} fill="#34383c" />
+      <text x={170} y={138} fontSize={5} fill="#cfd4d8" textAnchor="middle" fontFamily="var(--font-mono)">ATMEGA328P-PU</text>
+      <text x={170} y={147} fontSize={4} fill="#8d9499" textAnchor="middle" fontFamily="var(--font-mono)">16 MHz</text>
+      <rect x={108} y={92} width={32} height={14} rx={6} fill="url(#g-metal)" stroke="#7d848a" strokeWidth={0.6} />
+      <text x={124} y={100.6} fontSize={4} fill="#4e555b" textAnchor="middle" fontFamily="var(--font-mono)">16.000</text>
+
+      {/* reset button */}
+      <g
+        className="hit-control"
+        role="button"
+        aria-label="Reset button"
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          (e.currentTarget as Element).setPointerCapture(e.pointerId);
+          set(part.id, true);
+        }}
+        onPointerUp={() => set(part.id, false)}
+        onPointerCancel={() => set(part.id, false)}
+      >
+        <rect x={8} y={8} width={22} height={22} rx={2} fill="#1b1d1f" />
+        <rect x={10} y={10} width={18} height={18} rx={1.4} fill="url(#g-metal)" />
+        <circle cx={19} cy={pressed ? 19 : 18.4} r={pressed ? 5.4 : 6} fill={pressed ? "#8c1d16" : "#c0392b"} />
+        <circle cx={19} cy={pressed ? 19 : 18.4} r={pressed ? 5.4 : 6} fill="url(#g-dome)" opacity={0.7} />
+      </g>
+      <text x={19} y={37} fontSize={3.6} fill="#d9eef0" textAnchor="middle" fontFamily="var(--font-mono)">RESET</text>
+
+      {/* status LEDs */}
+      <SmdLed x={150} y={44} on={!!u?.l} color="#ffb020" label="L" />
+      <SmdLed x={150} y={52} on={!!u?.tx} color="#ffb020" label="TX" />
+      <SmdLed x={150} y={60} on={!!u?.rx} color="#ffb020" label="RX" />
+      <SmdLed x={150} y={68} on={!!u?.powered} color="#4dff7a" label="ON" />
+
+      <text x={206} y={106} fontSize={22} fontWeight={600} fill="#e8f4f5" textAnchor="middle" letterSpacing={-0.5}>UNO</text>
+      <text x={206} y={116} fontSize={4.4} fill="#bfe0e3" textAnchor="middle" fontFamily="var(--font-mono)">R3 · DIGITAL (~ PWM)</text>
+
+      {/* headers */}
+      {header(7, 16, 10)}
+      {header(18, 25, 10)}
+      {header(10, 16, 200)}
+      {header(18, 23, 200)}
+      {sockets(range(7, 16), 10)}
+      {sockets(range(18, 25), 10)}
+      {sockets(range(10, 16), 200)}
+      {sockets(range(18, 23), 200)}
+      <g fontSize={3.8} fill="#d9eef0" textAnchor="middle" fontFamily="var(--font-mono)">
+        {TOP_LABELS.map(([x, t]) => <text key={`t${x}`} x={x * U} y={26}>{t}</text>)}
+        {BOTTOM_LABELS.map(([x, t]) => <text key={`b${x}`} x={x * U} y={186}>{t}</text>)}
+        <text x={130} y={176} fontSize={4.2} opacity={0.8}>POWER</text>
+        <text x={205} y={176} fontSize={4.2} opacity={0.8}>ANALOG IN</text>
+      </g>
+    </g>
+  );
+}
+
 /* ---------- Dispatcher ---------- */
 
 interface GProps {
@@ -513,6 +626,7 @@ interface GProps {
 export function PartGraphic({ part, live }: GProps) {
   switch (part.type) {
     case "breadboard": return <Breadboard />;
+    case "uno": return <Uno part={part} live={live} />;
     case "battery9v": return <Battery9V />;
     case "batteryAA2": return <AAHolder cells={2} />;
     case "batteryAA4": return <AAHolder cells={4} />;

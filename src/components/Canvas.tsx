@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CATALOG, HOLES, formatSI, type PartType } from "@/sim/catalog";
 import { collides, findPin, partsOnBoard, pinPos, refPos, type Doc, type Part, type PinRef } from "@/sim/model";
+import { voltageAt } from "@/sim/engine";
 import { useStore } from "@/store";
 import { PartGraphic, U } from "./PartGraphics";
 
@@ -71,9 +72,12 @@ export default function Canvas() {
   }, []);
 
   /* ----- fit to content ----- */
+  /** True until the user pans or zooms by hand; then resizing no longer re-frames the circuit. */
+  const autoFit = useRef(true);
   const fit = useCallback(() => {
     const el = wrap.current;
     if (!el) return;
+    autoFit.current = true;
     const r = el.getBoundingClientRect();
     const b = bounds(useStore.getState().doc);
     const w = (b.x1 - b.x0) * U, h = (b.y1 - b.y0) * U;
@@ -84,8 +88,18 @@ export default function Canvas() {
   useEffect(() => {
     fit();
   }, [fit, fitTick]);
+  useEffect(() => {
+    const el = wrap.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      if (autoFit.current) fit();
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [fit]);
 
   const zoomAt = useCallback((clientX: number, clientY: number, factor: number) => {
+    autoFit.current = false;
     const r = wrap.current!.getBoundingClientRect();
     setView((v) => {
       const k = Math.max(MIN_K, Math.min(MAX_K, v.k * factor));
@@ -169,7 +183,10 @@ export default function Canvas() {
     }
     if (g?.kind === "pan") {
       const dx = e.clientX - g.lastX, dy = e.clientY - g.lastY;
-      if (Math.abs(dx) + Math.abs(dy) > 2) g.moved = true;
+      if (Math.abs(dx) + Math.abs(dy) > 2) {
+        g.moved = true;
+        autoFit.current = false;
+      }
       g.lastX = e.clientX;
       g.lastY = e.clientY;
       setView((v) => ({ ...v, x: v.x + dx, y: v.y + dy }));
@@ -282,10 +299,10 @@ export default function Canvas() {
     const part = doc.parts.find((p) => p.id === hover.ref.part);
     const pin = part && findPin(part, hover.ref.pin);
     if (!part || !pin) return null;
-    const volts = running || snapshot ? snapshot?.voltageAt(hover.ref) : undefined;
+    const volts = running || snapshot ? (snapshot ? voltageAt(snapshot, doc, hover.ref) : undefined) : undefined;
     const strip = part.type === "breadboard" ? HOLES.find((h) => h.id === pin.id)?.strip : undefined;
     return { part, pin, volts, strip };
-  }, [hover, doc.parts, snapshot, running]);
+  }, [hover, doc, snapshot, running]);
 
   const wiringPos = wiring ? refPos(doc, wiring) : null;
   const transform = `translate(${view.x} ${view.y}) scale(${view.k})`;

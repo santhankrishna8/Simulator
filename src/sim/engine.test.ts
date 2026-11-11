@@ -121,8 +121,8 @@ describe("example circuits", () => {
     expect(s.warnings).toEqual([]);
   });
   it("button example buzzes only when pressed", () => {
-    expect(run(ex("button"), 0.03).parts.bz.sounding).toBe(false);
-    expect(run(ex("button"), 0.03, new Set(["btn"])).parts.bz.sounding).toBe(true);
+    expect(run(ex("buzzer"), 0.03).parts.bz.sounding).toBe(false);
+    expect(run(ex("buzzer"), 0.03, new Set(["btn"])).parts.bz.sounding).toBe(true);
   });
   it("divider example reads a fraction of 9 V", () => {
     const s = run(ex("dimmer"), 0.05);
@@ -143,5 +143,127 @@ describe("example circuits", () => {
     const s = run(doc, 4);
     expect(s.parts.mot.rpm!).toBeGreaterThan(8000);
     expect(s.parts.m1.reading).toMatch(/A$/);
+  });
+});
+
+import { PREBUILT } from "./prebuilt.generated";
+
+describe("Arduino Uno in a circuit", () => {
+  /** Uno at the origin of its own space, breadboard to its right. D13 -> 330 ohm -> LED -> GND. */
+  function blinkCircuit(): Doc {
+    const uno = part("uno", -32, 0, { power: "usb" }, "uno");
+    const bb = part("breadboard", 0, 0, {}, "bb");
+    return {
+      parts: [uno, bb, part("resistor", 5, 12, { ohms: 330 }, "r"), part("led", 9, 11, { color: "red" }, "led")],
+      wires: [
+        wire(["uno", "d13"], ["bb", "5_13"]),
+        wire(["bb", "10_13"], ["bb", "10_18"]),
+        wire(["bb", "1_18"], ["uno", "gnd1"]),
+      ],
+    };
+  }
+  const advance = (e: Engine, doc: Doc, seconds: number) => {
+    let s = e.advance(doc, new Set(), 0.01);
+    for (let k = 1; k < Math.round(seconds / 0.01); k++) s = e.advance(doc, new Set(), 0.01);
+    return s;
+  };
+
+  it("lights the LED when the sketch drives pin 13 high, and not when low", () => {
+    const e = new Engine();
+    e.loadProgram(PREBUILT.blink);
+    const doc = blinkCircuit();
+    const samples: { on: boolean; l: boolean }[] = [];
+    for (let k = 0; k < 220; k++) {
+      const s = e.advance(doc, new Set(), 0.01);
+      samples.push({ on: s.parts.led.i > 0.005, l: !!s.parts.uno.uno?.l });
+    }
+    expect(samples.some((s) => s.on)).toBe(true);
+    expect(samples.some((s) => !s.on)).toBe(true);
+    for (const s of samples) expect(s.on).toBe(s.l); // LED follows the L LED exactly
+    const lit = e.advance(doc, new Set(), 0.001);
+    void lit;
+  });
+
+  it("limits LED current to what the resistor allows", () => {
+    const e = new Engine();
+    e.loadProgram(PREBUILT.blink);
+    const doc = blinkCircuit();
+    let peak = 0;
+    for (let k = 0; k < 120; k++) peak = Math.max(peak, e.advance(doc, new Set(), 0.01).parts.led.i);
+    // (5 V - 1.9 V) / (330 + 25 + 4) ohms is about 8.6 mA.
+    expect(peak).toBeGreaterThan(0.007);
+    expect(peak).toBeLessThan(0.01);
+  });
+
+  it("burns an LED wired straight to a pin, and warns about the pin first", () => {
+    const e = new Engine();
+    e.loadProgram(PREBUILT.blink);
+    const doc = blinkCircuit();
+    doc.parts = doc.parts.filter((p) => p.id !== "r");
+    doc.wires = [wire(["uno", "d13"], ["bb", "9_13"]), wire(["bb", "10_13"], ["bb", "10_18"]), wire(["bb", "1_18"], ["uno", "gnd1"])];
+    // LED sits at holes (9,11)/(10,11) and column 9 row 13 is the same strip.
+    let burned = false;
+    let overloaded = false;
+    for (let k = 0; k < 150; k++) {
+      const s = e.advance(doc, new Set(), 0.01);
+      burned ||= !!s.parts.led.burned;
+      overloaded ||= s.warnings.some((w) => w.id === "pin-d13" || w.id === "pinwarn-d13");
+    }
+    expect(overloaded).toBe(true);
+    expect(burned).toBe(true); // about 100 mA for a second or so: far past the 30 mA limit
+  });
+
+  it("reads a potentiometer on A0 and prints the value over serial", () => {
+    const e = new Engine();
+    e.loadProgram(PREBUILT.knob);
+    const uno = part("uno", -32, 0, { power: "usb" }, "uno");
+    const bb = part("breadboard", 0, 0, {}, "bb");
+    const pot = part("pot", 11, 12, { ohms: 10000, t: 0.5 }, "pot");
+    const doc: Doc = {
+      parts: [uno, bb, pot],
+      wires: [
+        wire(["uno", "5v"], ["bb", "1_17"]),
+        wire(["bb", "1_18"], ["uno", "gnd1"]),
+        wire(["bb", "11_15"], ["bb", "11_17"]),
+        wire(["bb", "13_15"], ["bb", "13_18"]),
+        wire(["uno", "a0"], ["bb", "12_14"]),
+      ],
+    };
+    advance(e, doc, 1);
+    const text = e.takeSerial();
+    expect(text).toMatch(/reading 5\d\d {3}2\.[45]\d V/);
+  });
+
+  it("is dead without power when set to external power", () => {
+    const e = new Engine();
+    e.loadProgram(PREBUILT.blink);
+    const doc = blinkCircuit();
+    doc.parts[0].props.power = "ext";
+    const s = advance(e, doc, 0.2);
+    expect(s.parts.uno.uno?.powered).toBe(false);
+    expect(s.warnings.some((w) => w.id === "unpowered")).toBe(true);
+    expect(s.parts.led.i).toBeLessThan(1e-6);
+  });
+
+  it("starts from a battery on VIN when set to external power", () => {
+    const e = new Engine();
+    e.loadProgram(PREBUILT.blink);
+    const doc = blinkCircuit();
+    doc.parts[0].props.power = "ext";
+    doc.parts.push(part("battery9v", -40, 30, {}, "bat"));
+    doc.wires.push(wire(["bat", "pos"], ["uno", "vin"]), wire(["bat", "neg"], ["uno", "gnd2"]));
+    const s = advance(e, doc, 0.5);
+    expect(s.parts.uno.uno?.powered).toBe(true);
+    expect(s.parts.uno.uno?.running).toBe(true);
+  });
+
+  it("holds the chip in reset while RESET is pulled to ground", () => {
+    const e = new Engine();
+    e.loadProgram(PREBUILT.blink);
+    const doc = blinkCircuit();
+    doc.wires.push(wire(["uno", "reset"], ["uno", "gnd2"]));
+    const s = advance(e, doc, 0.3);
+    expect(s.parts.uno.uno?.inReset).toBe(true);
+    expect(s.parts.uno.uno?.running).toBe(false);
   });
 });

@@ -1,8 +1,12 @@
 import type { Doc, Part, Wire } from "./model";
+import { SKETCHES } from "./sketches.mjs";
 
 const RED = "#d63a2f";
 const BLACK = "#1d1f22";
 const YELLOW = "#e8b10e";
+const ORANGE = "#e8742a";
+const BLUE = "#2f6fd6";
+const GREEN2 = "#2f9e44";
 const GREEN = "#2f9e44";
 
 const BB = "bb";
@@ -22,6 +26,8 @@ export interface Example {
   title: string;
   summary: string;
   doc: Doc;
+  /** Arduino sketch that goes with the circuit. */
+  sketch?: string;
 }
 
 export const EXAMPLES: Example[] = [
@@ -35,7 +41,7 @@ export const EXAMPLES: Example[] = [
     },
   },
   {
-    id: "button",
+    id: "buzzer",
     title: "Button and buzzer",
     summary: "Hold the button to complete the loop and sound the buzzer.",
     doc: {
@@ -106,4 +112,75 @@ export const EXAMPLES: Example[] = [
       ],
     },
   },
+
+  ...arduinoExamples(),
 ];
+
+/** Uno on the left of the breadboard. Ground goes to the bottom minus rail. */
+function unoBase(): { parts: Part[]; wires: Wire[] } {
+  return {
+    parts: [board(), p("uno", "uno", -33, 0, { power: "usb" })],
+    wires: [w(pin("uno", "gnd2"), hole(1, 18), BLACK)],
+  };
+}
+
+/** Resistor and LED from a signal row to ground, as used by most Arduino examples. */
+function ledBranch(sig: Wire["a"], resX: number, color: string): { parts: Part[]; wires: Wire[] } {
+  return {
+    parts: [p("r1", "resistor", resX, 12, { ohms: 330 }), p("led1", "led", resX + 4, 11, { color })],
+    wires: [w(sig, hole(resX, 14), ORANGE), w(hole(resX + 5, 14), hole(resX + 5, 18), BLACK)],
+  };
+}
+
+function arduinoExamples(): Example[] {
+  const make = (id: string, title: string, summary: string, parts: Part[], wires: Wire[]): Example => ({
+    id, title, summary, sketch: SKETCHES[id as keyof typeof SKETCHES], doc: { parts, wires },
+  });
+  const base = unoBase();
+
+  const blink = ledBranch(pin("uno", "d13"), 5, "red");
+  const fade = ledBranch(pin("uno", "d9"), 5, "green");
+  const btnLed = ledBranch(pin("uno", "d8"), 5, "yellow");
+
+  const knobLed = ledBranch(pin("uno", "d9"), 17, "blue");
+  const night = ledBranch(pin("uno", "d6"), 18, "white");
+
+  return [
+    make("blink", "Blink", "Your first sketch. An LED switches on and off every half second.", [...base.parts, ...blink.parts], [...base.wires, ...blink.wires]),
+    make("fade", "Fade with PWM", "analogWrite makes an LED look dimmer by switching it very fast.", [...base.parts, ...fade.parts], [...base.wires, ...fade.wires]),
+    make(
+      "button",
+      "Button with INPUT_PULLUP",
+      "Read a button and light an LED while it is held. The serial monitor logs each press.",
+      [...base.parts, ...btnLed.parts, p("btn", "button", 20, 8)],
+      [...base.wires, ...btnLed.wires, w(pin("uno", "d2"), hole(20, 5), GREEN2), w(hole(22, 14), hole(22, 18), BLACK)],
+    ),
+    make(
+      "knob",
+      "Knob reads a voltage",
+      "A potentiometer on A0 sets the LED's brightness. Turn it and watch the serial monitor.",
+      [...base.parts, ...knobLed.parts, p("pot1", "pot", 11, 12, { ohms: 10000, t: 0.5 })],
+      [
+        ...base.wires, ...knobLed.wires,
+        w(pin("uno", "5v"), hole(1, 17), RED),
+        w(hole(11, 14), hole(11, 17), RED),
+        w(hole(13, 14), hole(13, 18), BLACK),
+        w(pin("uno", "a0"), hole(12, 14), BLUE),
+      ],
+    ),
+    make(
+      "nightlight",
+      "Night light",
+      "A light sensor and a resistor form a divider. The darker the room, the brighter the LED.",
+      [...base.parts, ...night.parts, p("ldr1", "ldr", 11, 12, { t: 0.7 }), p("r2", "resistor", 12, 13, { ohms: 10000 })],
+      [
+        ...base.wires, ...night.wires,
+        w(pin("uno", "5v"), hole(1, 17), RED),
+        w(hole(11, 14), hole(11, 17), RED),
+        w(hole(16, 14), hole(16, 18), BLACK),
+        w(pin("uno", "a1"), hole(12, 15), BLUE),
+      ],
+    ),
+    make("serial", "Serial control", "Type 1 or 0 in the serial monitor to switch the L LED on the board.", [p("uno", "uno", -13, 0, { power: "usb" })], []),
+  ];
+}

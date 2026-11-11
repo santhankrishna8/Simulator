@@ -5,6 +5,7 @@
 
 export type PartType =
   | "breadboard"
+  | "uno"
   | "battery9v"
   | "batteryAA2"
   | "batteryAA4"
@@ -129,6 +130,30 @@ export const BATTERIES: Record<string, BatterySpec> = {
   coincell: { volts: 3, rint: 40, capacityMah: 225, shortAmps: 0.06 },
 };
 
+
+/* ---------- Arduino Uno geometry ---------- */
+
+/** Pin sockets of the Uno, in grid units from the board's top-left corner (USB end on the left). */
+function unoPins(): PinDef[] {
+  const pins: PinDef[] = [];
+  const add = (id: string, x: number, y: number, label: string) => pins.push({ id, x, y, label });
+  add("scl", 7, 1, "SCL (A5)");
+  add("sda", 8, 1, "SDA (A4)");
+  add("aref", 9, 1, "AREF");
+  add("gnd1", 10, 1, "GND");
+  const dLabels = ["D0 (RX)", "D1 (TX)", "D2 (INT0)", "D3 (PWM)", "D4", "D5 (PWM)", "D6 (PWM)", "D7", "D8", "D9 (PWM)", "D10 (PWM, SS)", "D11 (PWM, MOSI)", "D12 (MISO)", "D13 (SCK, L LED)"];
+  for (let i = 0; i < 14; i++) add(`d${i}`, i < 8 ? 25 - i : 24 - i, 1, dLabels[i]);
+  add("ioref", 10, 20, "IOREF");
+  add("reset", 11, 20, "RESET");
+  add("3v3", 12, 20, "3.3V");
+  add("5v", 13, 20, "5V");
+  add("gnd2", 14, 20, "GND");
+  add("gnd3", 15, 20, "GND");
+  add("vin", 16, 20, "VIN");
+  for (let i = 0; i < 6; i++) add(`a${i}`, 18 + i, 20, `A${i}${i === 4 ? " (SDA)" : i === 5 ? " (SCL)" : ""}`);
+  return pins;
+}
+
 /* ---------- Catalog ---------- */
 
 const defs: PartDef[] = [
@@ -146,6 +171,33 @@ const defs: PartDef[] = [
       wiring:
         "Each numbered column of five holes (a to e, and f to j) is one connection. The gap in the middle separates the two halves. The long rails marked + and − run the full length and carry power.",
       limits: "Each hole takes one lead. Clips are rated for about 1 A.",
+    },
+  },
+  {
+    type: "uno",
+    name: "Arduino Uno",
+    category: "Boards",
+    blurb: "ATmega328P, runs your sketch",
+    pins: unoPins(),
+    box: { x: -2.4, y: 0, w: 29.4, h: 21 },
+    defaults: { power: "usb" },
+    props: [
+      {
+        key: "power",
+        label: "Powered from",
+        kind: "choice",
+        options: [
+          { value: "usb", label: "USB cable" },
+          { value: "ext", label: "VIN or 5V pin" },
+        ],
+      },
+    ],
+    learn: {
+      what: "The Uno is a small computer on a board. Its ATmega328P chip runs the sketch you upload, reading inputs and switching outputs at 16 million steps a second.",
+      wiring:
+        "The 14 digital pins (D0 to D13) can each be an input or an output. A0 to A5 read voltages from 0 to 5 V as numbers 0 to 1023, and can also be used as digital pins. Connect GND to your circuit's ground, or nothing works.",
+      limits:
+        "Each pin can supply 20 mA comfortably and 40 mA at the absolute most. The 5V pin shares the USB cable's 500 mA. With external power, feed 7 to 12 V into VIN, or exactly 5 V into the 5V pin.",
     },
   },
   {

@@ -1,17 +1,40 @@
 "use client";
 
 import { create } from "zustand";
+import { buzz } from "./audio";
 import { CATALOG, HOLES, type PartType } from "./sim/catalog";
-import { Engine, type Snapshot } from "./sim/engine";
-import { EXAMPLES } from "./sim/examples";
+import { sim } from "./sim/client";
+import type { Snapshot } from "./sim/engine";
+import { EXAMPLES, type Example } from "./sim/examples";
 import {
   collides, holeMap, occupiedHoles, partsOnBoard, refPos, WIRE_COLORS,
   type Doc, type Part, type PinRef, type Rot,
 } from "./sim/model";
 
-export const engine = new Engine();
-
 export type Selection = { kind: "part" | "wire"; id: string } | null;
+
+export interface Diagnostic {
+  file: string;
+  line: number;
+  column: number;
+  severity: "error" | "warning";
+  message: string;
+}
+
+export interface Build {
+  status: "idle" | "building" | "ok" | "error";
+  diagnostics: Diagnostic[];
+  /** A message that is not tied to a line, such as "compile service unreachable". */
+  message?: string;
+  flash?: number;
+  ram?: number;
+  flashMax?: number;
+  ramMax?: number;
+  /** The program came from the bundled examples rather than the compiler. */
+  bundled?: boolean;
+}
+
+const SERIAL_LIMIT = 30_000;
 
 interface State {
   doc: Doc;
@@ -32,6 +55,30 @@ interface State {
   toast: { text: string; key: number } | null;
   /** Bumped to ask the canvas to frame the whole circuit. */
   fitTick: number;
+
+  /* ----- sketch ----- */
+  code: string;
+  /** Set while the code is an unchanged example, so its bundled program can be used. */
+  exampleId: string | null;
+  /** The source that is currently flashed on the board; differs from `code` after edits. */
+  builtCode: string | null;
+  hex: string | null;
+  build: Build;
+  serial: string;
+  /** Simulated seconds per real second, from the worker (1 is real time). */
+  speed: number;
+  dockOpen: boolean;
+  dockTab: "code" | "serial";
+  dockH: number;
+
+  setCode(code: string): void;
+  upload(): Promise<void>;
+  toggleRun(): Promise<void>;
+  loadExample(example: Example): void;
+  restore(): void;
+  applyFrame(frame: { snapshot: Snapshot; serial: string; speed: number }): void;
+  sendSerial(text: string): void;
+  clearSerial(): void;
 
   commit(doc: Doc): void;
   undo(): void;
@@ -56,6 +103,8 @@ interface State {
 }
 
 const STORAGE_KEY = "simulator.doc.v1";
+const SKETCH_KEY = "simulator.sketch.v1";
+const DEFAULT_CODE = `void setup() {\n  // runs once\n}\n\nvoid loop() {\n  // runs forever\n}\n`;
 let idCounter = 0;
 const newId = (prefix: string) => `${prefix}${Date.now().toString(36)}${(idCounter++).toString(36)}`;
 
@@ -73,6 +122,14 @@ export function loadSaved(): Doc | null {
     return doc;
   } catch {
     return null;
+  }
+}
+
+function saveSketch(s: { code: string; exampleId: string | null; builtCode: string | null; hex: string | null; build?: Build }) {
+  try {
+    localStorage.setItem(SKETCH_KEY, JSON.stringify(s));
+  } catch {
+    /* storage unavailable */
   }
 }
 
@@ -107,6 +164,15 @@ function resolveEnd(doc: Doc, ref: PinRef): PinRef | null {
   return { part: board.id, pin: options[0].id };
 }
 
+const EXAMPLE_SKETCHES = new Map(EXAMPLES.filter((e) => e.sketch).map((e) => [e.id, e.sketch!]));
+
+/** The bundled program for an example, if the code is still exactly the example's. */
+async function bundledHex(id: string, code: string): Promise<string | null> {
+  if (EXAMPLE_SKETCHES.get(id) !== code) return null;
+  const { PREBUILT } = await import("./sim/prebuilt.generated");
+  return PREBUILT[id] ?? null;
+}
+
 export const useStore = create<State>((set, get) => ({
   doc: initialDoc(),
   past: [],
@@ -123,7 +189,159 @@ export const useStore = create<State>((set, get) => ({
   toast: null,
   fitTick: 0,
 
+  code: DEFAULT_CODE,
+  exampleId: null,
+  builtCode: null,
+  hex: null,
+  build: { status: "idle", diagnostics: [] },
+  serial: "",
+  speed: 1,
+  dockOpen: false,
+  dockTab: "code",
+  dockH: 320,
+
   set: (partial) => set(partial),
+
+  setCode: (code) => {
+    const { exampleId, builtCode, hex, build } = get();
+    const next = { code, exampleId: exampleId && code === EXAMPLE_SKETCHES.get(exampleId) ? exampleId : null };
+    set(next);
+    saveSketch({ ...next, builtCode, hex, build: build.status === "ok" ? build : undefined });
+  },
+
+  upload: async () => {
+    const { code, exampleId, build } = get();
+    if (build.status === "building") return;
+    set({ build: { status: "building", diagnostics: [] }, dockOpen: true, dockTab: "code" });
+
+    let data: unknown = null;
+    try {
+      const res = await fetch("/api/compile", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sketch: code }),
+      });
+      data = await res.json().catch(() => null);
+    } catch {
+      data = null;
+    }
+    const reply = data as
+      | { ok: true; hex: string; flash: number; ram: number; flashMax: number; ramMax: number }
+      | { ok: false; diagnostics?: Diagnostic[]; message?: string }
+      | null;
+
+    const finish = (hex: string, build: Build) => {
+      const doc = get().doc;
+      sim.send({ t: "run", on: false });
+      sim.send({ t: "reset" });
+      sim.send({ t: "doc", doc });
+      sim.send({ t: "program", hex });
+      set({ hex, builtCode: code, serial: "", build, flow: {}, snapshot: null });
+      saveSketch({ code, exampleId, builtCode: code, hex, build });
+      get().setRunning(true);
+    };
+
+    if (reply?.ok) {
+      finish(reply.hex, { status: "ok", diagnostics: [], flash: reply.flash, ram: reply.ram, flashMax: reply.flashMax, ramMax: reply.ramMax });
+      return;
+    }
+    if (reply && !reply.ok && reply.diagnostics) {
+      set({ build: { status: "error", diagnostics: reply.diagnostics } });
+      return;
+    }
+    // No compiler reachable: an unchanged example still runs from its bundled program.
+    const bundled = exampleId ? await bundledHex(exampleId, code) : null;
+    if (bundled) {
+      finish(bundled, { status: "ok", diagnostics: [], bundled: true });
+      return;
+    }
+    set({
+      build: {
+        status: "error",
+        diagnostics: [],
+        message: (reply && !reply.ok && reply.message) || "Could not reach the compiler. Check your connection, or run an unchanged example, which works without it.",
+      },
+    });
+  },
+
+  toggleRun: async () => {
+    const st = get();
+    if (st.running) {
+      get().setRunning(false);
+      buzz(false);
+      return;
+    }
+    const hasBoard = st.doc.parts.some((p) => p.type === "uno");
+    if (hasBoard && st.builtCode !== st.code) {
+      await get().upload(); // starts the simulation when it succeeds
+      return;
+    }
+    get().setRunning(true);
+  },
+
+  loadExample: (example) => {
+    const { doc, sketch } = example;
+    sim.send({ t: "run", on: false });
+    sim.send({ t: "reset" });
+    sim.send({ t: "program", hex: null });
+    get().commit(structuredClone(doc));
+    set({
+      selection: null, wiring: null, snapshot: null, flow: {}, pressed: new Set(), running: false, serial: "",
+      fitTick: get().fitTick + 1, hex: null, builtCode: null, build: { status: "idle", diagnostics: [] },
+      ...(sketch ? { code: sketch, exampleId: example.id, dockOpen: true, dockTab: "code" as const } : { exampleId: null }),
+    });
+    if (sketch) {
+      void bundledHex(example.id, sketch).then((hex) => {
+        if (!hex || get().exampleId !== example.id) return;
+        sim.send({ t: "program", hex });
+        const build: Build = { status: "ok", diagnostics: [], bundled: true };
+        set({ hex, builtCode: sketch, build });
+        saveSketch({ code: sketch, exampleId: example.id, builtCode: sketch, hex, build });
+      });
+    } else saveSketch({ code: get().code, exampleId: null, builtCode: null, hex: null });
+  },
+
+  restore: () => {
+    const saved = loadSaved();
+    if (saved) set((s) => ({ doc: saved, fitTick: s.fitTick + 1 }));
+    try {
+      const raw = localStorage.getItem(SKETCH_KEY);
+      if (raw) {
+        const k = JSON.parse(raw) as { code?: string; exampleId?: string | null; builtCode?: string | null; hex?: string | null; build?: Build };
+        if (typeof k.code === "string") {
+          set({
+            code: k.code, exampleId: k.exampleId ?? null, builtCode: k.builtCode ?? null, hex: k.hex ?? null,
+            ...(k.hex && k.build?.status === "ok" ? { build: k.build } : {}),
+          });
+          if (k.hex && k.builtCode) sim.send({ t: "program", hex: k.hex });
+        }
+      }
+    } catch {
+      /* ignore damaged saved data */
+    }
+    sim.send({ t: "doc", doc: get().doc });
+  },
+
+  applyFrame: ({ snapshot, serial, speed }) => {
+    const st = get();
+    const prev = st.snapshot?.time ?? 0;
+    const dt = snapshot.time > prev ? Math.min(0.1, snapshot.time - prev) : 0;
+    const flow = { ...st.flow };
+    for (const [id, amps] of Object.entries(snapshot.wires)) {
+      const mag = Math.abs(amps);
+      if (mag < 1e-6) continue;
+      const rate = 10 + 80 * Math.sqrt(Math.min(1, mag / 0.1));
+      flow[id] = ((flow[id] ?? 0) + Math.sign(amps) * rate * dt) % 900;
+    }
+    set({
+      snapshot, flow, speed,
+      ...(serial ? { serial: (st.serial + serial).slice(-SERIAL_LIMIT) } : {}),
+    });
+    buzz(st.sound && Object.values(snapshot.parts).some((p) => p.sounding));
+  },
+
+  sendSerial: (text) => sim.send({ t: "serialIn", text }),
+  clearSerial: () => set({ serial: "" }),
 
   say: (text) => set({ toast: { text, key: Date.now() } }),
 
@@ -149,7 +367,7 @@ export const useStore = create<State>((set, get) => ({
   },
 
   load: (doc) => {
-    engine.reset();
+    sim.send({ t: "reset" });
     get().commit(structuredClone(doc));
     set({ selection: null, wiring: null, snapshot: null, flow: {}, pressed: new Set(), fitTick: get().fitTick + 1 });
   },
@@ -263,14 +481,18 @@ export const useStore = create<State>((set, get) => ({
     set({ pressed });
   },
 
-  setRunning: (running) => set({ running }),
-
-  resetSim: () => {
-    engine.reset();
-    set({ running: false, snapshot: null, flow: {} });
+  setRunning: (running) => {
+    sim.send({ t: "run", on: running });
+    set({ running });
   },
 
-  replacePart: (id) => engine.replace(id),
+  resetSim: () => {
+    sim.send({ t: "run", on: false });
+    sim.send({ t: "reset" });
+    set({ running: false, snapshot: null, flow: {}, serial: "" });
+  },
+
+  replacePart: (id) => sim.send({ t: "replace", id }),
 }));
 
 /** Red for anything touching +, black for −, otherwise rotate through the rest. */

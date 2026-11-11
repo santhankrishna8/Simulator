@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { BATTERIES, CATALOG, LED_COLORS, formatSI, parseSI, type PropDef } from "@/sim/catalog";
 import type { Warning } from "@/sim/engine";
-import { EXAMPLES } from "@/sim/examples";
+import { EXAMPLES, type Example } from "@/sim/examples";
 import { WIRE_COLORS, ldrOhms, type Part } from "@/sim/model";
 import { useStore } from "@/store";
 
@@ -113,9 +113,39 @@ function WarningCard({ w }: { w: Warning }) {
   );
 }
 
+function UnoPins({ part }: { part: Part }) {
+  const uno = useStore((s) => s.snapshot?.parts[part.id]?.uno);
+  if (!uno) return null;
+  const rows = Object.entries(uno.pins).filter(([, p]) => p.mode !== "off");
+  const label: Record<string, string> = { high: "Output HIGH", low: "Output LOW", input: "Input", pullup: "Input, pull-up" };
+  return (
+    <>
+      <dl className="readings">
+        <div><dt>Board</dt><dd>{!uno.powered ? "No power" : uno.inReset ? "In reset" : uno.running ? "Running" : "Idle"}</dd></div>
+        {uno.baud > 0 && <div><dt>Serial</dt><dd>{uno.baud.toLocaleString("en")} baud</dd></div>}
+      </dl>
+      {rows.length > 0 && (
+        <table className="pins">
+          <thead><tr><th>Pin</th><th>Mode</th><th>Volts</th></tr></thead>
+          <tbody>
+            {rows.map(([id, p]) => (
+              <tr key={id}>
+                <td>{id.toUpperCase()}</td>
+                <td>{label[p.mode]}</td>
+                <td>{formatSI(Math.abs(p.v) < 5e-4 ? 0 : p.v, "V", 3)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
+  );
+}
+
 function Readings({ part }: { part: Part }) {
   const live = useStore((s) => s.snapshot?.parts[part.id]);
   if (!live) return <p className="muted">Press Run to see live voltage and current.</p>;
+  if (part.type === "uno") return <UnoPins part={part} />;
   const rows: [string, string][] = [];
   const isBattery = part.type in BATTERIES;
   if (part.type === "meter") rows.push(["Reading", live.reading ?? "–"]);
@@ -244,10 +274,28 @@ function WirePanel({ id }: { id: string }) {
   );
 }
 
+function ExampleList({ title, items, onPick }: { title: string; items: Example[]; onPick: (e: Example) => void }) {
+  return (
+    <section>
+      <h3>{title}</h3>
+      <ul className="examples">
+        {items.map((ex) => (
+          <li key={ex.id}>
+            <button type="button" onClick={() => onPick(ex)}>
+              <b>{ex.title}</b>
+              <span>{ex.summary}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function Overview() {
   const running = useStore((s) => s.running);
   const snapshot = useStore((s) => s.snapshot);
-  const load = useStore((s) => s.load);
+  const loadExample = useStore((s) => s.loadExample);
   const warnings = snapshot?.warnings ?? [];
   return (
     <>
@@ -266,19 +314,8 @@ function Overview() {
         ) : (
           <p className="ok">{running ? "Everything is within its limits." : "Paused. Nothing was over its limits."}</p>
         )}
-        <section>
-          <h3>Starter circuits</h3>
-          <ul className="examples">
-            {EXAMPLES.map((ex) => (
-              <li key={ex.id}>
-                <button type="button" onClick={() => load(ex.doc)}>
-                  <b>{ex.title}</b>
-                  <span>{ex.summary}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
+        <ExampleList title="Circuits" items={EXAMPLES.filter((e) => !e.sketch)} onPick={loadExample} />
+        <ExampleList title="Arduino sketches" items={EXAMPLES.filter((e) => e.sketch)} onPick={loadExample} />
         <section className="learn">
           <h3>Using the bench</h3>
           <p>Click a pin or hole, then another, to run a wire. Hover any hole to see which holes it is joined to, and its voltage while running.</p>

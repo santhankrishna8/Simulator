@@ -1,5 +1,6 @@
-import { BATTERIES, formatSI } from "./catalog";
-import { compile, type Compiled, type Doc, type PinRef, type Runtime } from "./model";
+import { BATTERIES, HOLE_BY_ID, formatSI } from "./catalog";
+import { CPU_HZ, Mcu, UNO_PIN_IDS, parseHex, type PinMode } from "./mcu";
+import { compile, type Compiled, type Doc, type PinRef, type Runtime, type UnoHandle } from "./model";
 import { currentOf, makeState, solve } from "./solver";
 
 export interface PartLive {
@@ -21,6 +22,22 @@ export interface PartLive {
   usedMah?: number;
   /** Multimeter reading text. */
   reading?: string;
+  /** Arduino Uno state. */
+  uno?: UnoLive;
+}
+
+export interface UnoLive {
+  powered: boolean;
+  /** Held in reset by the RESET pin. */
+  inReset: boolean;
+  hasProgram: boolean;
+  running: boolean;
+  /** The L LED on pin 13, and the serial activity LEDs. */
+  l: boolean;
+  tx: boolean;
+  rx: boolean;
+  baud: number;
+  pins: Record<string, { mode: PinMode | "off"; v: number; i: number }>;
 }
 
 export interface Warning {
@@ -38,8 +55,24 @@ export interface Snapshot {
   /** Signed current per wire id, positive from end a to end b. */
   wires: Record<string, number>;
   warnings: Warning[];
-  voltageAt(ref: PinRef): number | undefined;
+  /** Node voltage by "part.pin" (or "board#strip" for breadboard strips). */
+  volts: Record<string, number>;
 }
+
+/** Voltage at any pin or breadboard hole, or undefined if it is not part of the circuit. */
+export function voltageAt(snap: Snapshot, doc: Doc, ref: PinRef): number | undefined {
+  const part = doc.parts.find((p) => p.id === ref.part);
+  if (!part) return undefined;
+  if (part.type === "breadboard") {
+    const hole = HOLE_BY_ID.get(ref.pin);
+    return hole ? snap.volts[`${part.id}#${hole.strip}`] : undefined;
+  }
+  return snap.volts[`${ref.part}.${ref.pin}`];
+}
+
+const OFF = 1e9; // ohms: an unpowered or high-impedance pin
+const PIN_OHMS = 25; // output driver resistance of an ATmega328P pin
+const PULLUP_OHMS = 35_000;
 
 const DT = 0.0002;
 const MAX_STEPS = 120;
@@ -60,7 +93,129 @@ export class Engine {
   private capV = new Map<string, number>();
   private diodeV = new Map<string, number>();
 
+  /* ----- the Uno's chip ----- */
+  private program: Uint16Array | null = null;
+  private mcu: Mcu | null = null;
+  private unoPowered = false;
+  private unoInReset = false;
+  private cycleDebt = 0;
+  private lastModes: (PinMode | "off")[] = [];
+  private lastLevel: (boolean | undefined)[] = [];
+  private serialBytes: number[] = [];
+  private decoder = new TextDecoder();
+  private lastTx = -1;
+  private lastRx = -1;
+  private seenTx = 0;
+  private seenRx = 0;
+  private baud = 0;
+  /** Last-seen voltages that decide whether the board is powered or in reset. */
+  private uV = { v5: 0, vin: 0, reset: 5 };
+
+  /** Load a compiled sketch (Intel HEX). The chip restarts at the next step; null clears it. */
+  loadProgram(hex: string | null) {
+    this.program = hex ? parseHex(hex) : null;
+    this.mcu = null;
+    this.cycleDebt = 0;
+    this.serialBytes = [];
+  }
+
+  /** Text the sketch has printed to Serial since the last call. */
+  takeSerial(): string {
+    if (!this.serialBytes.length) return "";
+    const text = this.decoder.decode(Uint8Array.from(this.serialBytes), { stream: true });
+    this.serialBytes = [];
+    return text;
+  }
+
+  /** Send text to the sketch's Serial.read(). */
+  serialIn(text: string) {
+    this.mcu?.receive(text);
+  }
+
+  private driveUno(h: UnoHandle) {
+    const v = this.uV;
+    const ext = h.part.props.power === "ext";
+    const vin = v.vin;
+    const regulator = ext && vin > 6.3;
+    const powered = !ext || regulator || v.v5 > 4.3;
+    const set = (e: UnoHandle["v5"], volts: number, ohms: number) => {
+      e.v = volts;
+      e.r = ohms;
+    };
+    if (!ext) set(h.v5, 5, 0.5);
+    else if (regulator) set(h.v5, 5, 1);
+    else set(h.v5, 0, OFF);
+    if (powered) {
+      set(h.v33, 3.3, 3);
+      set(h.reset, 5, 10_000);
+    } else {
+      set(h.v33, 0, OFF);
+      set(h.reset, 0, OFF);
+    }
+    this.unoPowered = powered;
+    // The reset pin pulls to 5 V through 10 k; a button to ground holds the chip in reset.
+    this.unoInReset = powered && v.v5 > 3 && v.reset < 1;
+
+    if (!powered || this.unoInReset) this.mcu = null;
+    else if (!this.mcu && this.program) {
+      this.mcu = new Mcu(this.program);
+      this.cycleDebt = 0;
+      this.lastLevel = [];
+      this.seenTx = this.seenRx = 0;
+    }
+
+    const vcc = Math.min(5.5, Math.max(0, v.v5));
+    UNO_PIN_IDS.forEach((id, i) => {
+      const e = h.drivers.get(id)!;
+      const mode: PinMode | "off" = this.mcu ? this.mcu.pinMode(i) : "off";
+      if (mode !== this.lastModes[i]) this.lastLevel[i] = undefined;
+      this.lastModes[i] = mode;
+      if (mode === "high") set(e, vcc, PIN_OHMS);
+      else if (mode === "low") set(e, 0, PIN_OHMS);
+      else if (mode === "pullup") set(e, vcc, PULLUP_OHMS);
+      else set(e, 0, OFF);
+    });
+  }
+
+  /** After a solve: tell the chip what its input pins see, then let it run for `dt`. */
+  private senseUno(h: UnoHandle, v: Float64Array, dt: number, nodes: Map<string, number>) {
+    const mcu = this.mcu;
+    if (!mcu) return;
+    const vcc = Math.max(0.1, v[h.n5v]);
+    UNO_PIN_IDS.forEach((id, i) => {
+      const node = nodes.get(`${h.part.id}.${id}`)!;
+      const volts = v[node];
+      if (i >= 14) mcu.adc.channelValues[i - 14] = Math.min(5, Math.max(0, volts));
+      const mode = this.lastModes[i];
+      if (mode !== "input" && mode !== "pullup") return;
+      // Schmitt-trigger thresholds from the datasheet: high above 0.6 Vcc, low below 0.3 Vcc.
+      const prev = this.lastLevel[i];
+      const level = volts > 0.6 * vcc ? true : volts < 0.3 * vcc ? false : (prev ?? false);
+      if (level !== prev) {
+        mcu.setInput(i, level);
+        this.lastLevel[i] = level;
+      }
+    });
+    mcu.adc.avcc = vcc;
+    this.cycleDebt += dt * CPU_HZ;
+    const cycles = Math.floor(this.cycleDebt);
+    this.cycleDebt -= cycles;
+    mcu.pumpSerial();
+    mcu.run(cycles);
+    const out = mcu.takeOutput();
+    if (out.length) for (const b of out) this.serialBytes.push(b);
+    if (mcu.txActivity !== this.seenTx) { this.seenTx = mcu.txActivity; this.lastTx = this.time; }
+    if (mcu.rxActivity !== this.seenRx) { this.seenRx = mcu.rxActivity; this.lastRx = this.time; }
+    this.baud = mcu.baud;
+  }
+
   reset() {
+    this.mcu = null;
+    this.cycleDebt = 0;
+    this.serialBytes = [];
+    this.lastTx = this.lastRx = -1;
+    this.lastModes = [];
+    this.lastLevel = [];
     this.time = 0;
     this.burned.clear();
     this.stress.clear();
@@ -97,13 +252,16 @@ export class Engine {
     const steps = Math.max(1, Math.min(MAX_STEPS, Math.round(seconds / DT)));
     const dt = seconds > 0 ? seconds / steps : DT;
     let v: Float64Array = new Float64Array(c.nodeCount);
-    const partI = new Map<string, number>();
+    const iSum = new Map<string, number>();
+    const pinSum: Record<string, number> = {};
     const wireI: Record<string, number> = {};
 
     for (let s = 0; s < steps; s++) {
+      if (c.uno) this.driveUno(c.uno);
       const vcPrev = Float64Array.from(state.vc);
       v = solve(c.nodeCount, c.elems, state, dt);
       this.time += dt;
+      if (c.uno) this.uV = { v5: v[c.uno.n5v], vin: v[c.uno.nVin], reset: v[c.uno.nReset] };
       let burnedNow = false;
 
       c.elems.forEach((e, idx) => {
@@ -112,11 +270,16 @@ export class Engine {
           wireI[e.wire] = i;
           return;
         }
+        if (e.k === "V" && e.pin) {
+          // A Uno pin or supply: current flowing out of the board.
+          pinSum[e.pin] = (pinSum[e.pin] ?? 0) - i;
+          return;
+        }
         if (e.k === "R" && e.tag) {
           if (e.tag !== "upper") return;
         }
         const id = e.part!;
-        partI.set(id, i);
+        iSum.set(id, (iSum.get(id) ?? 0) + i);
         const part = doc.parts.find((p) => p.id === id)!;
 
         if (e.k === "C") this.capV.set(id, state.vc[idx]);
@@ -155,6 +318,8 @@ export class Engine {
         }
       });
 
+      if (c.uno) this.senseUno(c.uno, v, dt, c.nodeOf);
+
       if (burnedNow) {
         // A part just failed open; rebuild the netlist without it.
         c = compile(doc, rt);
@@ -162,6 +327,9 @@ export class Engine {
         load();
       }
     }
+    // Currents are averaged over the frame, so a PWM-dimmed LED shows its mean current.
+    const partI = new Map<string, number>();
+    iSum.forEach((sum, id) => partI.set(id, sum / steps));
 
     const parts: Record<string, PartLive> = {};
     const warnings: Warning[] = [];
@@ -177,6 +345,77 @@ export class Engine {
       switch (part.type) {
         case "breadboard":
           break;
+        case "uno": {
+          const h = c.uno;
+          if (!h || h.part.id !== id) break;
+          const pins: UnoLive["pins"] = {};
+          let worst = 0;
+          UNO_PIN_IDS.forEach((pid, k) => {
+            const cur = pinSum[pid] !== undefined ? pinSum[pid] / steps : 0;
+            const node = c.nodeOf.get(`${id}.${pid}`)!;
+            pins[pid] = { mode: this.lastModes[k] ?? "off", v: v[node] ?? 0, i: cur };
+            if (Math.abs(cur) > Math.abs(worst)) worst = cur;
+            const amps = Math.abs(cur);
+            if (amps > 0.04) {
+              warnings.push({
+                id: `pin-${pid}`, level: "danger", part: id,
+                title: `Pin ${pid.toUpperCase()} is overloaded`,
+                why: `It is ${cur > 0 ? "supplying" : "sinking"} ${formatSI(amps, "A")}. An Uno pin is rated for 40 mA at the very most and 20 mA for everyday use. This is usually a pin wired straight to the opposite level, or an LED with no resistor.`,
+                fix: "Put a resistor in series, such as 220 Ω for an LED, or switch bigger loads with a transistor.",
+              });
+            } else if (amps > 0.02) {
+              warnings.push({
+                id: `pinwarn-${pid}`, level: "warn", part: id,
+                title: `Pin ${pid.toUpperCase()} is above 20 mA`,
+                why: `It is carrying ${formatSI(amps, "A")}. That is within the 40 mA absolute maximum but above the 20 mA recommended for long life.`,
+                fix: "Use a larger series resistor.",
+              });
+            }
+          });
+          const supply = (pinSum["5v"] ?? 0) / steps;
+          if (supply > 0.5) {
+            warnings.push({
+              id: "usb-limit", level: "danger", part: id,
+              title: "5V pin is overloaded",
+              why: `${formatSI(supply, "A")} is being drawn from the 5V pin. USB provides 500 mA, and the board's resettable fuse would trip and cut the power.`,
+              fix: "Check for a short between 5V and GND, or power motors from their own battery.",
+            });
+          }
+          const tx = this.lastTx >= 0 && this.time - this.lastTx < 0.06;
+          const rx = this.lastRx >= 0 && this.time - this.lastRx < 0.06;
+          parts[id] = {
+            v: v[h.n5v] ?? 0,
+            i: supply,
+            p: (v[h.n5v] ?? 0) * supply,
+            uno: {
+              powered: this.unoPowered,
+              inReset: this.unoInReset,
+              hasProgram: !!this.program,
+              running: !!this.mcu,
+              l: this.lastModes[13] === "high",
+              tx,
+              rx,
+              baud: this.baud,
+              pins,
+            },
+          };
+          if (!this.unoPowered) {
+            warnings.push({
+              id: "unpowered", level: "info", part: id,
+              title: "The Uno has no power",
+              why: "The board is set to take power from VIN or the 5V pin, and nothing is supplying it.",
+              fix: "Feed 7 to 12 V into VIN, or exactly 5 V into the 5V pin, and connect GND. Or choose USB power in the inspector.",
+            });
+          } else if (!this.program) {
+            warnings.push({
+              id: "noprog", level: "info", part: id,
+              title: "No sketch uploaded yet",
+              why: "The Uno is powered but its chip has nothing to run.",
+              fix: "Open the Code panel and press Upload.",
+            });
+          }
+          break;
+        }
         case "battery9v":
         case "batteryAA2":
         case "batteryAA4":
@@ -354,17 +593,14 @@ export class Engine {
       }
     }
 
-    const compiled = c;
-    const volts = v;
+    const volts: Record<string, number> = {};
+    c.nodeOf.forEach((n, key) => (volts[key] = v[n] ?? 0));
     return {
       time: this.time,
       parts,
       wires: wireI,
       warnings,
-      voltageAt(ref) {
-        const n = compiled.node(ref);
-        return n === undefined ? undefined : volts[n];
-      },
+      volts,
     };
   }
 }
