@@ -10,6 +10,7 @@ set -euo pipefail
 ROOT="${1:?usage: setup.sh <install-dir>}"
 CORE_TAG="${CORE_TAG:-1.8.6}"
 SERVO_TAG="${SERVO_TAG:-1.2.2}"
+LCD_TAG="${LCD_TAG:-1.0.7}"
 CORE_DIR="${CORE_SRC:-}"
 
 mkdir -p "$ROOT"
@@ -24,6 +25,12 @@ if [ -z "$SERVO_DIR" ]; then
   git clone --quiet --depth 1 --branch "$SERVO_TAG" https://github.com/arduino-libraries/Servo.git "$SERVO_DIR"
 fi
 
+LCD_DIR="${LCD_SRC:-}"
+if [ -z "$LCD_DIR" ]; then
+  LCD_DIR="$(mktemp -d)/lcd"
+  git clone --quiet --depth 1 --branch "$LCD_TAG" https://github.com/arduino-libraries/LiquidCrystal.git "$LCD_DIR"
+fi
+
 rm -rf "$ROOT/cores" "$ROOT/variants" "$ROOT/libraries" "$ROOT/build"
 mkdir -p "$ROOT/cores" "$ROOT/variants" "$ROOT/libraries" "$ROOT/build"
 cp -r "$CORE_DIR/cores/arduino" "$ROOT/cores/arduino"
@@ -31,6 +38,8 @@ cp -r "$CORE_DIR/variants/standard" "$ROOT/variants/standard"
 for lib in Wire SPI EEPROM SoftwareSerial; do cp -r "$CORE_DIR/libraries/$lib" "$ROOT/libraries/$lib"; done
 cp -r "$SERVO_DIR" "$ROOT/libraries/Servo"
 rm -rf "$ROOT/libraries/Servo/.git"
+cp -r "$LCD_DIR" "$ROOT/libraries/LiquidCrystal"
+rm -rf "$ROOT/libraries/LiquidCrystal/.git"
 
 MCU=atmega328p
 COMMON="-mmcu=$MCU -DF_CPU=16000000L -DARDUINO=10819 -DARDUINO_AVR_UNO -DARDUINO_ARCH_AVR -I$ROOT/cores/arduino -I$ROOT/variants/standard"
@@ -58,7 +67,7 @@ build_dir() { # <src dir> <out archive> <extra include>
 
 echo "building core"
 build_dir "$ROOT/cores/arduino" "$ROOT/build/core.a"
-for lib in Wire SPI EEPROM SoftwareSerial Servo; do
+for lib in Wire SPI EEPROM SoftwareSerial Servo LiquidCrystal; do
   echo "building $lib"
   src="$ROOT/libraries/$lib/src"
   [ -d "$src" ] || src="$ROOT/libraries/$lib"

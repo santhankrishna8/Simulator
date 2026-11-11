@@ -1,9 +1,12 @@
 import { BATTERIES, HOLE_BY_ID, formatSI } from "./catalog";
+import { Device, HcSr04, Lcd1602, Servo, type DeviceCtx, type DeviceLive } from "./devices";
 import { CPU_HZ, Mcu, UNO_PIN_IDS, parseHex, type PinMode } from "./mcu";
 import { compile, type Compiled, type Doc, type PinRef, type Runtime, type UnoHandle } from "./model";
+import { DEVICE_SUPPLY } from "./pins";
+import { ScopeBuf, scopeView, type ScopeStats } from "./scope";
 import { bjtCurrents, currentOf, makeState, solve } from "./solver";
 
-export interface PartLive {
+export interface PartLive extends DeviceLive {
   /** Voltage across the part's main terminals. */
   v: number;
   /** Current through the part, in amps. */
@@ -30,6 +33,21 @@ export interface PartLive {
   on?: boolean;
   /** Extra labelled readings for the inspector. */
   extra?: Record<string, string>;
+  /** Oscilloscope screen contents. */
+  scope?: ScopeLive;
+}
+
+export interface ScopeLive {
+  t: number[];
+  ch1: number[];
+  ch2: number[];
+  triggered: boolean;
+  stats1: ScopeStats;
+  stats2: ScopeStats;
+  tdiv: number;
+  v1div: number;
+  v2div: number;
+  trig: number;
 }
 
 export interface UnoLive {
@@ -81,7 +99,10 @@ const PIN_OHMS = 25; // output driver resistance of an ATmega328P pin
 const PULLUP_OHMS = 35_000;
 
 const DT = 0.0002;
+/** With an oscilloscope on the bench the circuit is solved twice as often (10 kHz sampling). */
+const DT_SCOPE = 0.0001;
 const MAX_STEPS = 120;
+const MAX_STEPS_SCOPE = 240;
 
 // Hobby "130" motor constants.
 const MOTOR_K = 0.00286; // V·s/rad and N·m/A
@@ -101,6 +122,9 @@ export class Engine {
   private coilI = new Map<string, number>();
   private bjtV = new Map<string, [number, number]>();
   private relays = new Set<string>();
+  private scopes = new Map<string, ScopeBuf>();
+  /** Per-part LED-style channel currents from the latest step (the LCD's backlight). */
+  private chanNow = new Map<string, Record<string, number>>();
   private burnWhy = new Map<string, "spike" | "current" | "heat" | "reverse">();
 
   /* ----- the Uno's chip ----- */
@@ -118,6 +142,14 @@ export class Engine {
   private seenTx = 0;
   private seenRx = 0;
   private baud = 0;
+  /* ----- exact-timing devices (servo, ultrasonic sensor, LCD) ----- */
+  private devices = new Map<string, Device>();
+  private devKinds = new Map<string, string>();
+  private bindings = new Map<string, number>();
+  private byUnoPin = new Map<number, { device: Device; pin: string }[]>();
+  /** Uno pins whose input level comes straight from a device's output, not the circuit solver. */
+  private directPins = new Set<number>();
+  private devLevel = new Map<string, boolean>();
   /** Last-seen voltages that decide whether the board is powered or in reset. */
   private uV = { v5: 0, vin: 0, reset: 5 };
 
@@ -169,6 +201,8 @@ export class Engine {
     if (!powered || this.unoInReset) this.mcu = null;
     else if (!this.mcu && this.program) {
       this.mcu = new Mcu(this.program);
+      this.mcu.onPin = (pin, level) => this.byUnoPin.get(pin)?.forEach((t) => t.device.input(t.pin, level));
+      this.devices.forEach((d) => d.onChipReset());
       this.cycleDebt = 0;
       this.lastLevel = [];
       this.seenTx = this.seenRx = 0;
@@ -198,6 +232,7 @@ export class Engine {
       if (i >= 14) mcu.adc.channelValues[i - 14] = Math.min(5, Math.max(0, volts));
       const mode = this.lastModes[i];
       if (mode !== "input" && mode !== "pullup") return;
+      if (this.directPins.has(i)) return; // a device sets this input at an exact cycle
       // Schmitt-trigger thresholds from the datasheet: high above 0.6 Vcc, low below 0.3 Vcc.
       const prev = this.lastLevel[i];
       const level = volts > 0.6 * vcc ? true : volts < 0.3 * vcc ? false : (prev ?? false);
@@ -239,6 +274,100 @@ export class Engine {
     this.bjtV.clear();
     this.relays.clear();
     this.burnWhy.clear();
+    this.devices.clear();
+    this.devKinds.clear();
+    this.devLevel.clear();
+    this.chanNow.clear();
+    this.scopes.clear();
+  }
+
+
+  /** Create, update and remove device models to match the document. Run once per frame. */
+  private syncDevices(doc: Doc, c: Compiled) {
+    const live = new Set<string>();
+    for (const part of doc.parts) {
+      if (!(part.type in DEVICE_SUPPLY)) continue;
+      live.add(part.id);
+      if (this.devKinds.get(part.id) !== part.type) {
+        const id = part.id;
+        const ctx: DeviceCtx = {
+          cycles: () => this.mcu?.cycles ?? 0,
+          schedule: (cycles, fn) => this.mcu?.schedule(cycles, fn),
+          drive: (pin, level) => {
+            const dev = this.devices.get(id);
+            if (dev) dev.outputs[pin] = level;
+            const up = this.bindings.get(`${id}.${pin}`);
+            const mode = up === undefined ? undefined : this.lastModes[up];
+            if (up !== undefined && this.mcu && (mode === "input" || mode === "pullup")) {
+              this.mcu.setInput(up, level);
+              this.lastLevel[up] = level;
+            }
+          },
+        };
+        this.devices.set(id, part.type === "servo" ? new Servo(ctx) : part.type === "hcsr04" ? new HcSr04(ctx) : new Lcd1602(ctx));
+        this.devKinds.set(id, part.type);
+      }
+      this.devices.get(part.id)!.props = part.props;
+    }
+    for (const id of [...this.devices.keys()]) {
+      if (live.has(id)) continue;
+      this.devices.delete(id);
+      this.devKinds.delete(id);
+    }
+    this.bindings = c.bindings;
+    this.byUnoPin.clear();
+    this.directPins.clear();
+    c.bindings.forEach((unoPin, key) => {
+      const [id, pin] = key.split(".");
+      const device = this.devices.get(id);
+      if (!device) return;
+      if (device.inputs.includes(pin as never)) {
+        const list = this.byUnoPin.get(unoPin) ?? [];
+        list.push({ device, pin });
+        this.byUnoPin.set(unoPin, list);
+      } else this.directPins.add(unoPin); // an output pin such as ECHO
+    });
+  }
+
+  /** Before a solve: set each device's load and output drivers. */
+  private driveDevices(c: Compiled) {
+    c.devices.forEach((h, id) => {
+      const dev = this.devices.get(id);
+      if (!dev) return;
+      if (h.load) h.load.r = dev.load();
+      h.drivers.forEach((e, pin) => {
+        e.v = dev.outputs[pin] ? 5 : 0;
+        e.r = dev.powered ? 50 : OFF;
+      });
+    });
+  }
+
+  /** After a solve: read each device's supply and unwired inputs, and let it move. */
+  private senseDevices(c: Compiled, v: Float64Array, dt: number) {
+    c.devices.forEach((h, id) => {
+      const dev = this.devices.get(id);
+      if (!dev) return;
+      const vcc = v[h.vcc] - v[h.gnd];
+      const pinV = (pin: string) => {
+        const n = c.nodeOf.get(`${id}.${pin}`);
+        return n === undefined ? 0 : v[n] - v[h.gnd];
+      };
+      // Inputs that are not wired straight to a Uno pin are read as voltages.
+      for (const pin of dev.inputs) {
+        if (this.bindings.has(`${id}.${pin}`)) continue;
+        const key = `${id}.${pin}`;
+        const volts = pinV(pin);
+        const prev = this.devLevel.get(key);
+        const level = volts > 3.0 ? true : volts < 1.5 ? false : (prev ?? false);
+        if (level === prev) continue;
+        this.devLevel.set(key, level);
+        if (prev !== undefined || level) dev.input(pin, level);
+      }
+      let backlightAmps = 0;
+      const dm = this.chanNow.get(id)?.bl;
+      if (dm !== undefined) backlightAmps = dm;
+      dev.step({ v: pinV, dt, vcc, backlightAmps });
+    });
   }
 
   /** Swap a burnt part (or all burnt channels of a part) for a fresh one. */
@@ -265,6 +394,7 @@ export class Engine {
     this.omega.forEach((w, id) => emf.set(id, MOTOR_K * w));
     const rt: Runtime = { pressed, burned: this.burned, emf, relays: this.relays };
     let c: Compiled = compile(doc, rt);
+    this.syncDevices(doc, c);
     let state = makeState(c.elems);
     const load = () => {
       c.elems.forEach((e, idx) => {
@@ -280,8 +410,12 @@ export class Engine {
     };
     load();
 
-    const steps = Math.max(1, Math.min(MAX_STEPS, Math.round(seconds / DT)));
-    const dt = seconds > 0 ? seconds / steps : DT;
+    const scopeParts = doc.parts.filter((p) => p.type === "scope");
+    const baseDt = scopeParts.length ? DT_SCOPE : DT;
+    const steps = Math.max(1, Math.min(scopeParts.length ? MAX_STEPS_SCOPE : MAX_STEPS, Math.round(seconds / baseDt)));
+    const dt = seconds > 0 ? seconds / steps : baseDt;
+    for (const id of [...this.scopes.keys()]) if (!scopeParts.some((p) => p.id === id)) this.scopes.delete(id);
+    for (const p of scopeParts) if (!this.scopes.has(p.id)) this.scopes.set(p.id, new ScopeBuf());
     let v: Float64Array = new Float64Array(c.nodeCount);
     const iSum = new Map<string, number>();
     const ibSum = new Map<string, number>();
@@ -291,6 +425,7 @@ export class Engine {
 
     for (let s = 0; s < steps; s++) {
       if (c.uno) this.driveUno(c.uno);
+      this.driveDevices(c);
       const vcPrev = Float64Array.from(state.vc);
       v = solve(c.nodeCount, c.elems, state, dt);
       this.time += dt;
@@ -304,6 +439,7 @@ export class Engine {
           wireI[e.wire] = i;
           return;
         }
+        if (e.k === "V" && e.dev) return;
         if (e.k === "V" && e.pin) {
           // A Uno pin or supply: current flowing out of the board.
           pinSum[e.pin] = (pinSum[e.pin] ?? 0) - i;
@@ -349,11 +485,12 @@ export class Engine {
         if (e.k === "C") this.capV.set(id, state.vc[idx]);
         if (e.k === "D") this.diodeV.set(`${id}:${e.tag ?? ""}`, state.vd[idx]);
 
-        if (e.k === "D" && e.tag && (part.type === "rgbled" || part.type === "sevenseg")) {
+        if (e.k === "D" && e.tag && (part.type === "rgbled" || part.type === "sevenseg" || part.type === "lcd1602")) {
           const ch = chanSum.get(id) ?? {};
           ch[e.tag] = (ch[e.tag] ?? 0) + i;
           chanSum.set(id, ch);
-          if (this.overstress(`${id}:${e.tag}`, i, dt)) {
+          this.chanNow.set(id, { ...(this.chanNow.get(id) ?? {}), [e.tag]: i });
+          if (part.type !== "lcd1602" && this.overstress(`${id}:${e.tag}`, i, dt)) {
             this.burned.add(`${id}:${e.tag}`);
             burnedNow = true;
           }
@@ -400,11 +537,18 @@ export class Engine {
         }
       }
 
+      for (const sp of scopeParts) {
+        const g = c.nodeOf.get(`${sp.id}.gnd`), a = c.nodeOf.get(`${sp.id}.ch1`), b = c.nodeOf.get(`${sp.id}.ch2`);
+        if (g === undefined || a === undefined || b === undefined) continue;
+        this.scopes.get(sp.id)!.push(this.time, v[a] - v[g], v[b] - v[g]);
+      }
+      this.senseDevices(c, v, dt);
       if (c.uno) this.senseUno(c.uno, v, dt, c.nodeOf);
 
       if (burnedNow) {
         // A part just failed open; rebuild the netlist without it.
         c = compile(doc, rt);
+        this.syncDevices(doc, c);
         state = makeState(c.elems);
         load();
       }
@@ -603,6 +747,56 @@ export class Engine {
               why: `It has ${formatSI(vc, "V")} across it and is rated for 16 V.`,
               fix: "Lower the supply voltage.",
             });
+          }
+          break;
+        }
+        case "scope": {
+          const buf = this.scopes.get(id);
+          const tdiv = Number(part.props.tdiv) || 0.002;
+          const trig = Number(part.props.trig);
+          const view = buf ? scopeView(buf, tdiv, Number.isFinite(trig) ? trig : 2.5) : null;
+          if (view) {
+            const f = (hz?: number) => (hz === undefined ? "–" : hz >= 1000 ? formatSI(hz, "Hz", 4) : `${hz.toFixed(hz < 100 ? 1 : 0)} Hz`);
+            parts[id] = {
+              v: 0, i: 0, p: 0,
+              scope: { ...view, tdiv, v1div: Number(part.props.v1div) || 1, v2div: Number(part.props.v2div) || 1, trig: Number.isFinite(trig) ? trig : 2.5 },
+              extra: {
+                "CH1 frequency": f(view.stats1.freq),
+                "CH1 duty cycle": view.stats1.duty === undefined ? "–" : `${(view.stats1.duty * 100).toFixed(0)} %`,
+                "CH1 peak to peak": formatSI(view.stats1.vpp, "V"),
+                "CH1 average": formatSI(view.stats1.mean, "V"),
+                "CH2 peak to peak": formatSI(view.stats2.vpp, "V"),
+                "CH2 average": formatSI(view.stats2.mean, "V"),
+                Trigger: view.triggered ? "Locked" : "Free-running (no edge found)",
+              },
+            };
+          }
+          break;
+        }
+        case "servo":
+        case "hcsr04":
+        case "lcd1602": {
+          const dev = this.devices.get(id);
+          const sup = DEVICE_SUPPLY[part.type];
+          const supply = nv(id, sup.vcc) - nv(id, sup.gnd);
+          parts[id] = { v: supply, i, p: 0, ...(dev ? dev.live() : {}) };
+          if (dev && !dev.powered) {
+            warnings.push({
+              id: `nopower-${id}`, level: "info", part: id,
+              title: `${part.type === "servo" ? "Servo" : part.type === "hcsr04" ? "Ultrasonic sensor" : "LCD"} has no power`,
+              why: `It sees ${formatSI(Math.max(0, supply), "V")} across its supply pins and needs ${part.type === "servo" ? "4 to 6" : "about 5"} V. Check that both the power and ground pins are connected.`,
+              fix: "Connect the supply pin to 5 V and the ground pin to GND.",
+            });
+          } else if (part.type === "lcd1602") {
+            const lcd = parts[id].lcd;
+            if (lcd && lcd.blocks && !lcd.on && nv(id, "v0") - nv(id, "vss") >= 0.08) {
+              warnings.push({
+                id: `lcdinit-${id}`, level: "info", part: id,
+                title: "LCD is not initialised",
+                why: "The display shows blocks on its first row until the sketch sends the start-up commands.",
+                fix: "In setup(), call lcd.begin(16, 2) with the pins used in LiquidCrystal lcd(rs, e, d4, d5, d6, d7).",
+              });
+            }
           }
           break;
         }

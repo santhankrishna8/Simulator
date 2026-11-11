@@ -12,7 +12,7 @@ export type Elem =
   /** Jumper wire, modelled as a very small resistance so its current is known. */
   | { k: "W"; a: number; b: number; wire: string }
   /** Voltage source `v` with series resistance `r`; `a` is the positive side. */
-  | { k: "V"; a: number; b: number; v: number; r: number; part: string; pin?: string }
+  | { k: "V"; a: number; b: number; v: number; r: number; part: string; pin?: string; dev?: string }
   /** Shockley diode from `a` (anode) to `b` (cathode). */
   | { k: "D"; a: number; b: number; is: number; nvt: number; part: string; tag?: string }
   /** Inductor; current flows from `a` to `b`. */

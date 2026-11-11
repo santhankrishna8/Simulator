@@ -19,6 +19,7 @@ const LIBRARIES = {
   "EEPROM.h": "EEPROM",
   "SoftwareSerial.h": "SoftwareSerial",
   "Servo.h": "Servo",
+  "LiquidCrystal.h": "LiquidCrystal",
 };
 
 const MCU = "atmega328p";

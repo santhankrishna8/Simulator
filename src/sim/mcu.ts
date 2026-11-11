@@ -43,10 +43,7 @@ export function pinToPort(pin: number): { port: "B" | "C" | "D"; bit: number } {
   return { port: "C", bit: pin - 14 };
 }
 
-export const UNO_PIN_IDS = [
-  ...Array.from({ length: 14 }, (_, i) => `d${i}`),
-  ...Array.from({ length: 6 }, (_, i) => `a${i}`),
-];
+export { UNO_PIN_IDS } from "./pins";
 
 export class Mcu {
   readonly cpu: CPU;
@@ -58,6 +55,12 @@ export class Mcu {
   /** Counters that tick when the matching serial LED should blink. */
   txActivity = 0;
   rxActivity = 0;
+  /**
+   * Called the instant a pin the sketch drives changes level, from inside the instruction that
+   * changed it, so `this.cycles` is the exact clock cycle of the edge.
+   */
+  onPin: ((pin: number, level: boolean) => void) | null = null;
+  private readonly emitted: (boolean | undefined)[] = new Array(20).fill(undefined);
 
   constructor(program: Uint16Array) {
     this.cpu = new CPU(program);
@@ -66,6 +69,21 @@ export class Mcu {
       C: new AVRIOPort(this.cpu, portCConfig),
       D: new AVRIOPort(this.cpu, portDConfig),
     };
+    const watch = (port: AVRIOPort, base: number, bits: number) =>
+      port.addListener(() => {
+        if (!this.onPin) return;
+        for (let bit = 0; bit < bits; bit++) {
+          const state = port.pinState(bit);
+          if (state !== PinState.High && state !== PinState.Low) continue;
+          const level = state === PinState.High;
+          if (this.emitted[base + bit] === level) continue;
+          this.emitted[base + bit] = level;
+          this.onPin(base + bit, level);
+        }
+      });
+    watch(this.ports.D, 0, 8);
+    watch(this.ports.B, 8, 6);
+    watch(this.ports.C, 14, 6);
     new AVRTimer(this.cpu, timer0Config);
     new AVRTimer(this.cpu, timer1Config);
     new AVRTimer(this.cpu, timer2Config);
@@ -91,6 +109,11 @@ export class Mcu {
 
   get cycles() {
     return this.cpu.cycles;
+  }
+
+  /** Run `fn` after `cycles` more clock cycles, at that exact cycle. */
+  schedule(cycles: number, fn: () => void) {
+    this.cpu.addClockEvent(fn, Math.max(1, cycles));
   }
 
   /** What the sketch has the pin configured to do right now. */

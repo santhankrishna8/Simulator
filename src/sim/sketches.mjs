@@ -137,4 +137,230 @@ void loop() {
   }
 }
 `,
+
+  rgb: `// RGB colour cycle: three PWM pins mix red, green and blue light.
+// Each colour has its own resistor. analogWrite(pin, 0..255) sets how bright.
+
+const int redPin = 9;
+const int greenPin = 10;
+const int bluePin = 11;
+
+void setColor(int red, int green, int blue) {
+  analogWrite(redPin, red);
+  analogWrite(greenPin, green);
+  analogWrite(bluePin, blue);
+}
+
+void setup() {
+  pinMode(redPin, OUTPUT);
+  pinMode(greenPin, OUTPUT);
+  pinMode(bluePin, OUTPUT);
+}
+
+void loop() {
+  setColor(255, 0, 0);     // red
+  delay(700);
+  setColor(255, 120, 0);   // orange
+  delay(700);
+  setColor(0, 255, 0);     // green
+  delay(700);
+  setColor(0, 255, 255);   // cyan
+  delay(700);
+  setColor(0, 0, 255);     // blue
+  delay(700);
+  setColor(255, 0, 255);   // magenta
+  delay(700);
+  setColor(255, 255, 255); // all three: white
+  delay(700);
+}
+`,
+
+  sevenseg: `// Seven-segment counter: show the digits 0 to 9, one segment per pin.
+// Each digit is a pattern of seven bits. Bit 0 is segment a, bit 1 is b, and so on up to g.
+
+const int segPins[7] = {2, 3, 4, 5, 6, 7, 8};   // a, b, c, d, e, f, g
+
+const byte digits[10] = {
+  0b0111111,  // 0
+  0b0000110,  // 1
+  0b1011011,  // 2
+  0b1001111,  // 3
+  0b1100110,  // 4
+  0b1101101,  // 5
+  0b1111101,  // 6
+  0b0000111,  // 7
+  0b1111111,  // 8
+  0b1101111   // 9
+};
+
+void show(int digit) {
+  for (int s = 0; s < 7; s++) {
+    digitalWrite(segPins[s], (digits[digit] >> s) & 1);
+  }
+}
+
+void setup() {
+  for (int s = 0; s < 7; s++) {
+    pinMode(segPins[s], OUTPUT);
+  }
+}
+
+void loop() {
+  for (int d = 0; d < 10; d++) {
+    show(d);
+    delay(800);
+  }
+}
+`,
+
+  servo: `// Servo sweep: turn the horn from 0 to 180 degrees and back.
+// The Servo library sends a pulse every 20 ms. 544 us means 0 degrees,
+// 2400 us means 180 degrees, and write(angle) works out the pulse for you.
+
+#include <Servo.h>
+
+Servo arm;
+
+void setup() {
+  arm.attach(9);
+}
+
+void loop() {
+  for (int angle = 0; angle <= 180; angle += 2) {
+    arm.write(angle);
+    delay(15);                 // give the servo time to get there
+  }
+  for (int angle = 180; angle >= 0; angle -= 2) {
+    arm.write(angle);
+    delay(15);
+  }
+}
+`,
+
+  servoknob: `// Servo knob: a potentiometer steers the servo.
+// analogRead gives 0 to 1023. map() rescales that to 0 to 180 degrees.
+
+#include <Servo.h>
+
+Servo arm;
+const int potPin = A0;
+
+void setup() {
+  arm.attach(9);
+  Serial.begin(9600);
+}
+
+void loop() {
+  int reading = analogRead(potPin);
+  int angle = map(reading, 0, 1023, 0, 180);
+  arm.write(angle);
+
+  Serial.print("angle ");
+  Serial.println(angle);
+  delay(100);
+}
+`,
+
+  ultrasonic: `// Ultrasonic ruler: measure distance with an HC-SR04.
+// A 10 us pulse on TRIG starts a measurement. ECHO then goes HIGH for as long
+// as the sound took to bounce back. Sound travels about 29 us per centimetre,
+// and the trip is there and back, so distance in cm = echo time / 58.
+
+const int trigPin = 9;
+const int echoPin = 10;
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+}
+
+void loop() {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  long echoTime = pulseIn(echoPin, HIGH, 30000);   // give up after 30 ms
+
+  if (echoTime == 0) {
+    Serial.println("nothing in range");
+  } else {
+    Serial.print(echoTime / 58.0, 1);
+    Serial.println(" cm");
+  }
+  delay(300);
+}
+`,
+
+  lcdhello: `// Hello LCD: print text on a 16x2 character display.
+// LiquidCrystal lcd(rs, enable, d4, d5, d6, d7) says which pins are wired.
+// The display is in 4-bit mode, so only D4 to D7 carry data.
+
+#include <LiquidCrystal.h>
+
+LiquidCrystal lcd(12, 11, 5, 4, 3, 2);
+
+void setup() {
+  lcd.begin(16, 2);              // 16 columns, 2 rows
+  lcd.print("Hello, world!");
+}
+
+void loop() {
+  lcd.setCursor(0, 1);           // column 0, second row
+  lcd.print("Uptime: ");
+  lcd.print(millis() / 1000);
+  lcd.print(" s   ");
+  delay(200);
+}
+`,
+
+  pwmscope: `// PWM on the oscilloscope: the duty cycle steps between 25% and 75%.
+// Probe the pin to see the square wave. A resistor and capacitor smooth it into
+// a steady voltage, which A0 reads. Higher duty means higher average voltage.
+
+const int pwmPin = 9;
+
+void setup() {
+  pinMode(pwmPin, OUTPUT);
+  Serial.begin(9600);
+}
+
+void loop() {
+  analogWrite(pwmPin, 64);        // 25 % on
+  delay(1500);
+  Serial.print("25% duty, filtered voltage: ");
+  Serial.print(analogRead(A0) * 5.0 / 1023.0, 2);
+  Serial.println(" V");
+
+  analogWrite(pwmPin, 191);       // 75 % on
+  delay(1500);
+  Serial.print("75% duty, filtered voltage: ");
+  Serial.print(analogRead(A0) * 5.0 / 1023.0, 2);
+  Serial.println(" V");
+}
+`,
+
+  plotter: `// Plotter: print numbers and watch them graph in the Plotter tab.
+// Print values separated by spaces, one line per sample. Put name: before
+// a value to label its line.
+
+const int potPin = A0;
+
+void setup() {
+  Serial.begin(9600);
+}
+
+void loop() {
+  float t = millis() / 1000.0;
+  int knob = analogRead(potPin);
+
+  Serial.print("knob:");
+  Serial.print(knob);
+  Serial.print(" wave:");
+  Serial.println(512 + 400 * sin(t * 2.0));
+  delay(40);
+}
+`,
 };

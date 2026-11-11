@@ -1,4 +1,5 @@
 import { BATTERIES, CATALOG, HOLE_BY_ID, LED_COLORS, type PartType, type PinDef } from "./catalog";
+import { DEVICE_SUPPLY, UNO_PIN_IDS } from "./pins";
 import type { Elem } from "./solver";
 
 export type Rot = 0 | 1 | 2 | 3;
@@ -152,7 +153,20 @@ export interface UnoHandle {
   nReset: number;
 }
 
+/** A timing-critical device's handles into the netlist. */
+export interface DeviceHandle {
+  /** Resistor across the supply pins; the engine changes it as the device's load changes. */
+  load?: Extract<Elem, { k: "R" }>;
+  /** Output pin drivers, by pin id. */
+  drivers: Map<string, Extract<Elem, { k: "V" }>>;
+  vcc: number;
+  gnd: number;
+}
+
 export interface Compiled {
+  /** For each device pin ("part.pin") tied to a Uno pin, that pin's Arduino number. */
+  bindings: Map<string, number>;
+  devices: Map<string, DeviceHandle>;
   uno?: UnoHandle;
   nodeCount: number;
   elems: Elem[];
@@ -265,6 +279,7 @@ export function compile(doc: Doc, rt: Runtime): Compiled {
 
   const elems: Elem[] = [];
   let unoHandle: UnoHandle | undefined;
+  const devices = new Map<string, DeviceHandle>();
   for (const w of doc.wires) {
     const a = keyOf(w.a);
     const b = keyOf(w.b);
@@ -357,6 +372,33 @@ export function compile(doc: Doc, rt: Runtime): Compiled {
         elems.push({ k: "R", a: N(id, "com"), b: N(id, rt.relays.has(id) ? "no" : "nc"), r: 0.1, part: id, tag: "contact" });
         break;
       }
+      case "servo":
+      case "hcsr04":
+      case "lcd1602": {
+        const sup = DEVICE_SUPPLY[p.type];
+        const handle: DeviceHandle = { drivers: new Map(), vcc: N(id, sup.vcc), gnd: N(id, sup.gnd) };
+        const load: Extract<Elem, { k: "R" }> = { k: "R", a: handle.vcc, b: handle.gnd, r: 500, part: id, tag: "load" };
+        elems.push(load);
+        handle.load = load;
+        if (p.type === "hcsr04") {
+          const echo: Extract<Elem, { k: "V" }> = { k: "V", a: N(id, "echo"), b: handle.gnd, v: 0, r: 1e9, part: id, dev: "echo" };
+          elems.push(echo);
+          handle.drivers.set("echo", echo);
+        }
+        if (p.type === "lcd1602" && !rt.burned.has(`${id}:bl`)) {
+          const nvt = 2 * VT;
+          const mid = extra();
+          elems.push({ k: "D", a: N(id, "a"), b: mid, is: satCurrent(3.0, 0.02, nvt, 4), nvt, part: id, tag: "bl" });
+          elems.push({ k: "R", a: mid, b: N(id, "k"), r: 47, part: id, tag: "series" });
+        }
+        devices.set(id, handle);
+        break;
+      }
+      case "scope":
+        // A 1 MΩ probe: it barely loads the circuit.
+        elems.push({ k: "R", a: N(id, "ch1"), b: N(id, "gnd"), r: 1e6, part: id, tag: "load" });
+        elems.push({ k: "R", a: N(id, "ch2"), b: N(id, "gnd"), r: 1e6, part: id, tag: "load" });
+        break;
       case "button":
         elems.push({ k: "R", a: N(id, "a1"), b: N(id, "a2"), r: 0.01, part: id, tag: "link" });
         elems.push({ k: "R", a: N(id, "b1"), b: N(id, "b2"), r: 0.01, part: id, tag: "link" });
@@ -393,7 +435,52 @@ export function compile(doc: Doc, rt: Runtime): Compiled {
     }
   }
 
+  // Logic nets: pins joined by wires and breadboard strips are one signal, so a device's input can
+  // be matched to the Uno pin that drives it. A series resistor up to 1 kΩ (a protection resistor)
+  // does not break the match.
+  const bindings = new Map<string, number>();
+  if (board && devices.size) {
+    const lp = new Map<string, string>();
+    for (const key of parent.keys()) lp.set(key, find(key));
+    const lfind = (k: string): string => {
+      let r = lp.get(k) ?? k;
+      while ((lp.get(r) ?? r) !== r) r = lp.get(r)!;
+      return r;
+    };
+    for (const w of doc.wires) {
+      const a = keyOf(w.a);
+      const b = keyOf(w.b);
+      if (!a || !b) continue;
+      const ra = lfind(a), rb = lfind(b);
+      if (ra !== rb) lp.set(ra, rb);
+    }
+    const unoByNet = new Map<string, number>();
+    UNO_PIN_IDS.forEach((pid, i) => {
+      const root = lfind(`${board.id}.${pid}`);
+      if (!unoByNet.has(root)) unoByNet.set(root, i);
+    });
+    const smallResistors = doc.parts.filter((r) => r.type === "resistor" && Number(r.props.ohms) <= 1000);
+    for (const dev of doc.parts) {
+      if (!devices.has(dev.id)) continue;
+      for (const pin of CATALOG[dev.type].pins) {
+        const root = lfind(`${dev.id}.${pin.id}`);
+        let idx = unoByNet.get(root);
+        if (idx === undefined) {
+          for (const r of smallResistors) {
+            const ra = lfind(`${r.id}.a`), rb = lfind(`${r.id}.b`);
+            if (ra === root && unoByNet.has(rb)) idx = unoByNet.get(rb);
+            else if (rb === root && unoByNet.has(ra)) idx = unoByNet.get(ra);
+            if (idx !== undefined) break;
+          }
+        }
+        if (idx !== undefined) bindings.set(`${dev.id}.${pin.id}`, idx);
+      }
+    }
+  }
+
   return {
+    bindings,
+    devices,
     uno: unoHandle,
     nodeCount: count,
     elems,

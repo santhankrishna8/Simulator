@@ -10,6 +10,10 @@ export type PartType =
   | "rgbled"
   | "sevenseg"
   | "relay"
+  | "servo"
+  | "hcsr04"
+  | "lcd1602"
+  | "scope"
   | "battery9v"
   | "batteryAA2"
   | "batteryAA4"
@@ -37,6 +41,11 @@ export interface PropDef {
   key: string;
   label: string;
   kind: "ohms" | "farads" | "choice" | "range";
+  /** Range props default to 0..1; give these to use real units instead. */
+  min?: number;
+  max?: number;
+  step?: number;
+  unit?: string;
   options?: { value: string; label: string }[];
   /** Range props are 0..1 and can be changed while the simulation runs. */
   live?: boolean;
@@ -157,6 +166,10 @@ function unoPins(): PinDef[] {
   for (let i = 0; i < 6; i++) add(`a${i}`, 18 + i, 20, `A${i}${i === 4 ? " (SDA)" : i === 5 ? " (SCL)" : ""}`);
   return pins;
 }
+
+
+const LCD_PIN_NAMES = ["vss", "vdd", "v0", "rs", "rw", "e", "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "a", "k"];
+const LCD_PIN_LABELS = ["VSS (GND)", "VDD (5 V)", "V0 (contrast)", "RS (register select)", "RW (read/write)", "E (enable)", "D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7", "A (backlight +)", "K (backlight −)"];
 
 /* ---------- Catalog ---------- */
 
@@ -288,6 +301,101 @@ const defs: PartDef[] = [
       what: "An electromagnet that moves a switch. The coil circuit and the contact circuit are separate, so a small signal can switch a big or high-voltage load safely.",
       wiring: "Drive the coil through a transistor, as a microcontroller pin cannot supply 70 mA. Put a diode across the coil, stripe toward the positive side. The contacts: common joins normally open when the coil is on, and normally closed when it is off.",
       limits: "The coil is 70 Ω and needs 5 V (about 70 mA). It pulls in above about 3.7 V. When the coil switches off it produces a large voltage spike that destroys an unprotected transistor.",
+    },
+  },
+  {
+    type: "servo",
+    name: "Servo motor",
+    category: "Output",
+    blurb: "SG90, turns to an angle",
+    pins: [
+      { id: "gnd", x: 0, y: 0, label: "GND (brown)" },
+      { id: "vcc", x: 1, y: 0, label: "V+ (red)" },
+      { id: "sig", x: 2, y: 0, label: "Signal (orange)" },
+    ],
+    box: { x: -9, y: -17, w: 21, h: 17.6 },
+    defaults: {},
+    props: [],
+    learn: {
+      what: "A small motor with gears and a position sensor inside. You tell it an angle by sending a pulse every 20 ms: 0.5 ms means 0°, 1.5 ms means 90° and 2.4 ms means 180°.",
+      wiring: "Brown to GND, red to 5 V, orange to a digital pin. In a sketch, #include <Servo.h>, attach it to the pin, then call write(angle).",
+      limits: "Needs 4 to 6 V. It draws about 10 mA when holding and 200 mA or more when moving, so power bigger servos from their own supply, sharing only the ground.",
+    },
+  },
+  {
+    type: "hcsr04",
+    name: "Ultrasonic sensor",
+    category: "Input",
+    blurb: "HC-SR04, measures distance",
+    pins: [
+      { id: "vcc", x: 0, y: 0, label: "VCC (5 V)" },
+      { id: "trig", x: 1, y: 0, label: "TRIG" },
+      { id: "echo", x: 2, y: 0, label: "ECHO" },
+      { id: "gnd", x: 3, y: 0, label: "GND" },
+    ],
+    box: { x: -7.2, y: -9, w: 18, h: 9.6 },
+    defaults: { cm: 100 },
+    props: [{ key: "cm", label: "Object distance", kind: "range", min: 2, max: 400, step: 1, unit: "cm", live: true, lowLabel: "2 cm", highLabel: "4 m (nothing in range)" }],
+    learn: {
+      what: "It sends a burst of ultrasound and times the echo, like a bat. Distance is the echo time times the speed of sound (343 m/s), divided by two for the round trip.",
+      wiring: "Send a 10 µs HIGH pulse to TRIG. ECHO then goes HIGH for as long as the sound took. In a sketch, pulseIn(echoPin, HIGH) measures it, and distance in cm is that time in µs divided by 58.",
+      limits: "Works from 2 cm to 4 m, and needs a clean 5 V supply. Measure no more than every 60 ms, so one echo cannot be mistaken for the next.",
+    },
+  },
+  {
+    type: "lcd1602",
+    name: "16×2 LCD",
+    category: "Output",
+    blurb: "Character display, 2 lines of 16",
+    pins: LCD_PIN_NAMES.map((id, x) => ({ id, x, y: 0, label: LCD_PIN_LABELS[x] })),
+    box: { x: -2.6, y: -0.8, w: 36, h: 16 },
+    defaults: {},
+    props: [],
+    learn: {
+      what: "A display with its own controller chip (the HD44780). You send it characters and commands over a few data lines, and it draws them. Each character is a 5×8 grid of dots.",
+      wiring: "VSS to GND, VDD to 5 V, K to GND, A to 5 V through a 220 Ω resistor for the backlight. V0 sets contrast: a potentiometer between 5 V and GND with its middle pin to V0, turned until the text is clear. RW to GND. RS, E and D4 to D7 to digital pins, and in a sketch, LiquidCrystal lcd(rs, e, d4, d5, d6, d7).",
+      limits: "The text is invisible if V0 is too high, and this simulator shows solid blocks if V0 is at or near 0 V (some real modules are still readable there, but many are not). The controller must be initialised by lcd.begin(16, 2) before it shows anything.",
+    },
+  },
+  {
+    type: "scope",
+    name: "Oscilloscope",
+    category: "Instruments",
+    blurb: "Draws voltage against time",
+    pins: [
+      { id: "ch1", x: 0, y: 0, label: "CH1 probe (yellow)" },
+      { id: "ch2", x: 1, y: 0, label: "CH2 probe (cyan)" },
+      { id: "gnd", x: 2, y: 0, label: "Ground clip" },
+    ],
+    box: { x: -2, y: -25.4, w: 26.4, h: 25.9 },
+    defaults: { tdiv: "0.002", v1div: "1", v2div: "1", trig: 2.5 },
+    props: [
+      {
+        key: "tdiv",
+        label: "Time per division",
+        kind: "choice",
+        options: [
+          { value: "0.0001", label: "0.1 ms" },
+          { value: "0.0002", label: "0.2 ms" },
+          { value: "0.0005", label: "0.5 ms" },
+          { value: "0.001", label: "1 ms" },
+          { value: "0.002", label: "2 ms" },
+          { value: "0.005", label: "5 ms" },
+          { value: "0.01", label: "10 ms" },
+          { value: "0.02", label: "20 ms" },
+          { value: "0.05", label: "50 ms" },
+          { value: "0.1", label: "100 ms" },
+          { value: "0.2", label: "200 ms" },
+        ],
+      },
+      { key: "v1div", label: "CH1 volts per division", kind: "choice", options: [{ value: "0.5", label: "0.5 V" }, { value: "1", label: "1 V" }, { value: "2", label: "2 V" }, { value: "5", label: "5 V" }] },
+      { key: "v2div", label: "CH2 volts per division", kind: "choice", options: [{ value: "0.5", label: "0.5 V" }, { value: "1", label: "1 V" }, { value: "2", label: "2 V" }, { value: "5", label: "5 V" }] },
+      { key: "trig", label: "Trigger level (CH1, rising edge)", kind: "range", min: 0, max: 5, step: 0.1, unit: "V", live: true, lowLabel: "0 V", highLabel: "5 V" },
+    ],
+    learn: {
+      what: "A scope draws how a voltage changes over time. A multimeter gives one number; a scope shows the whole shape, so you can see a PWM square wave, a capacitor charging or a button bouncing.",
+      wiring: "Touch a probe to the node you want to see, and clip the ground clip to GND. The screen is 10 divisions wide and 8 tall: pick the time per division so a few cycles fit, and volts per division so the wave fills the screen.",
+      limits: "It samples every 0.1 ms (10 kHz), so it shows signals up to a few kilohertz. The trigger holds a repeating wave still by starting each sweep when CH1 rises through the trigger level.",
     },
   },
   {

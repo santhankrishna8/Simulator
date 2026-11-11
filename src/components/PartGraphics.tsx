@@ -3,6 +3,7 @@
 import { memo } from "react";
 import { BB_COLS, BB_H, BB_W, HOLES, LED_COLORS, ROW_LETTERS, formatSI, resistorBands } from "@/sim/catalog";
 import type { PartLive } from "@/sim/engine";
+import { glyph } from "@/sim/lcdfont";
 import type { Part } from "@/sim/model";
 import { useStore } from "@/store";
 
@@ -719,6 +720,217 @@ function Relay({ live }: GProps) {
   );
 }
 
+
+/* ---------- Servo, ultrasonic sensor, LCD ---------- */
+
+function ServoGfx({ live }: GProps) {
+  const deg = live?.deg ?? 90;
+  return (
+    <g>
+      <FlyLead d="M-30 -76 C-30 -30 0 -50 0 0" color="#6b3f1d" />
+      <FlyLead d="M-30 -70 C-30 -26 10 -44 10 0" color="#d63a2f" />
+      <FlyLead d="M-30 -64 C-30 -22 20 -38 20 0" color="#e8742a" />
+      <PinTip x={0} y={0} />
+      <PinTip x={10} y={0} />
+      <PinTip x={20} y={0} />
+      {/* mounting ears and body */}
+      <rect x={-48} y={-92} width={146} height={11} rx={2} fill="#2c63c4" />
+      <rect x={-36} y={-132} width={112} height={74} rx={4} fill="#2f6fd6" />
+      <rect x={-36} y={-132} width={112} height={74} rx={4} fill="url(#g-shade-h)" opacity={0.55} />
+      <rect x={-36} y={-132} width={112} height={10} rx={3} fill="#2557ab" />
+      <circle cx={-52} cy={-86} r={3.4} fill="#14161a" />
+      <circle cx={102} cy={-86} r={3.4} fill="#14161a" />
+      <circle cx={50} cy={-140} r={19} fill="#2f6fd6" />
+      <circle cx={50} cy={-140} r={19} fill="url(#g-dome)" opacity={0.5} />
+      <text x={-2} y={-98} fontSize={9} fontWeight={600} fill="#e8f0ff" textAnchor="middle" letterSpacing={0.6}>SG90</text>
+      <text x={-2} y={-86} fontSize={5} fill="#bcd1f5" textAnchor="middle" fontFamily="var(--font-mono)">9 g · 4.8–6 V</text>
+      {/* horn */}
+      <g transform={`rotate(${deg - 90} 50 -140)`}>
+        <path d="M44 -140 L46 -204 A4 4 0 0 1 54 -204 L56 -140 Z" fill="#f4f6f8" stroke="#aab2b8" strokeWidth={0.7} />
+        {[-190, -176, -162].map((y) => <circle key={y} cx={50} cy={y} r={1.6} fill="#8d959b" />)}
+        <circle cx={50} cy={-140} r={9} fill="#f4f6f8" stroke="#aab2b8" strokeWidth={0.7} />
+        <circle cx={50} cy={-140} r={2.4} fill="#6d747a" />
+      </g>
+    </g>
+  );
+}
+
+function Ultrasonic() {
+  return (
+    <g>
+      {[0, 10, 20, 30].map((x) => <Lead key={x} d={`M${x} 0 V-9`} />)}
+      <rect x={-72} y={-85} width={177} height={80} rx={3} fill="#1f5fae" />
+      <rect x={-72} y={-85} width={177} height={80} rx={3} fill="url(#g-shade-v)" opacity={0.5} />
+      {[-26, 62].map((cx) => (
+        <g key={cx}>
+          <circle cx={cx} cy={-46} r={31} fill="#b9bfc4" />
+          <circle cx={cx} cy={-46} r={27} fill="#2a2e32" />
+          <circle cx={cx} cy={-46} r={21} fill="#4b5157" />
+          <circle cx={cx} cy={-46} r={9} fill="#2a2e32" />
+          <circle cx={cx} cy={-46} r={31} fill="url(#g-dome)" opacity={0.7} />
+        </g>
+      ))}
+      <rect x={4} y={-74} width={14} height={7} rx={1} fill="url(#g-metal)" />
+      <rect x={6} y={-20} width={22} height={11} rx={1} fill="#16181a" />
+      <text x={17} y={-30} fontSize={7} fontWeight={600} fill="#e6eefb" textAnchor="middle" fontFamily="var(--font-mono)">HC-SR04</text>
+      <g fontSize={3.8} fill="#cfdcf1" textAnchor="middle" fontFamily="var(--font-mono)">
+        {["VCC", "TRIG", "ECHO", "GND"].map((t, i) => <text key={t} x={i * 10} y={-12.4}>{t}</text>)}
+      </g>
+    </g>
+  );
+}
+
+const DOT = 2.5;
+const CELL_W = 15;
+const CELL_H = 27;
+
+/** Column bytes for a character code: the font for ASCII, or a custom character from CGRAM. */
+function cellColumns(code: number, cgram: number[][]): number[] {
+  if (code < 16) {
+    const rows = cgram[code & 7] ?? [];
+    return Array.from({ length: 5 }, (_, c) => rows.reduce((acc, row, r) => acc | (((row >> (4 - c)) & 1) << r), 0));
+  }
+  return glyph(code) ?? [0, 0, 0, 0, 0];
+}
+
+function Lcd({ live }: GProps) {
+  const lcd = live?.lcd;
+  const dim = lcd ? Math.max(0.04, lcd.contrast) : 0.1;
+  const backlit = (lcd?.backlight ?? 0) > 0.05;
+  const ink = lcd ? (lcd.on || lcd.blocks) : false;
+  let dots = "";
+  if (lcd && ink) {
+    for (let row = 0; row < 2; row++) {
+      for (let col = 0; col < 16; col++) {
+        const x0 = col * CELL_W, y0 = row * CELL_H;
+        const solid = lcd.blocks && (row === 0 || lcd.contrast >= 1);
+        const cols = solid ? [127, 127, 127, 127, 127] : lcd.on ? cellColumns(lcd.rows[row][col], lcd.cgram) : [0, 0, 0, 0, 0];
+        for (let c = 0; c < 5; c++) {
+          for (let r = 0; r < 8; r++) {
+            if ((cols[c] >> r) & 1 || (solid && r === 7)) dots += `M${(x0 + c * (DOT + 0.4)).toFixed(1)} ${(y0 + r * (DOT + 0.4)).toFixed(1)}h${DOT}v${DOT}h-${DOT}z`;
+          }
+        }
+      }
+    }
+  }
+  const cur = lcd?.on ? lcd.cursor : null;
+  return (
+    <g>
+      {Array.from({ length: 16 }, (_, i) => <Lead key={i} d={`M${i * 10} 0 V-8`} />)}
+      <rect x={-26} y={-8} width={340} height={150} rx={3} fill="#1c6d3d" />
+      <rect x={-26} y={-8} width={340} height={150} rx={3} fill="url(#g-shade-v)" opacity={0.4} />
+      <rect x={-12} y={28} width={312} height={4} fill="none" />
+      {[[-14, 6], [-14, 126], [300, 6], [300, 126]].map(([x, y]) => (
+        <circle key={`${x}${y}`} cx={x} cy={y} r={3.2} fill="#0b3a20" stroke="#cfe3d3" strokeWidth={0.8} />
+      ))}
+      {/* the glass */}
+      <rect x={8} y={18} width={276} height={104} rx={2} fill="#2b2e30" />
+      <rect x={20} y={32} width={256} height={74} fill={backlit ? "#b6d84a" : "#7d927a"} opacity={backlit ? 1 : 0.9} />
+      {backlit && <rect x={20} y={32} width={256} height={74} fill="#e5ff7a" opacity={0.25 * (lcd?.backlight ?? 0)} />}
+      <g transform="translate(25 38)">
+        <path d={dots} fill="#16260c" opacity={dim * 0.95} />
+        {cur && cur.underline && <rect x={cur.col * CELL_W} y={cur.row * CELL_H + 7 * (DOT + 0.4)} width={5 * (DOT + 0.4) - 0.4} height={DOT} fill="#16260c" opacity={dim} />}
+        {cur && cur.blink && <rect className="blink" x={cur.col * CELL_W} y={cur.row * CELL_H} width={5 * (DOT + 0.4) - 0.4} height={8 * (DOT + 0.4) - 0.4} fill="#16260c" opacity={dim} />}
+      </g>
+      <rect x={20} y={32} width={256} height={74} fill="url(#g-shade-v)" opacity={0.18} />
+      <rect x={8} y={18} width={276} height={104} rx={2} fill="url(#g-dome)" opacity={0.08} />
+      <g fontSize={3.8} fill="#d9eef0" textAnchor="middle" fontFamily="var(--font-mono)">
+        {["VSS", "VDD", "V0", "RS", "RW", "E", "D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7", "A", "K"].map((t, i) => <text key={t} x={i * 10} y={6}>{t}</text>)}
+        <text x={150} y={134} fontSize={5} opacity={0.85}>1602A · HD44780</text>
+      </g>
+    </g>
+  );
+}
+
+
+/* ---------- Oscilloscope ---------- */
+
+const SC_W = 200;
+const SC_H = 160;
+const SC_X = 0;
+const SC_Y = -232;
+const SC_GROUND = SC_Y + SC_H - 20; // 0 V sits one division above the bottom
+
+function trace(t: number[], v: number[], tdiv: number, vdiv: number): string {
+  const span = tdiv * 10;
+  let d = "";
+  for (let i = 0; i < t.length; i++) {
+    const x = SC_X + (t[i] / span) * SC_W;
+    const y = Math.max(SC_Y, Math.min(SC_Y + SC_H, SC_GROUND - (v[i] / vdiv) * 20));
+    d += `${i ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)}`;
+  }
+  return d;
+}
+
+const fmtT = (s: number) => (s >= 1 ? `${s} s` : s >= 0.001 ? `${+(s * 1000).toFixed(2)} ms` : `${+(s * 1e6).toFixed(0)} µs`);
+
+function Scope({ part, live }: GProps) {
+  const sc = live?.scope;
+  const tdiv = Number(part.props.tdiv) || 0.002;
+  const v1 = Number(part.props.v1div) || 1;
+  const v2 = Number(part.props.v2div) || 1;
+  const trig = Number(part.props.trig);
+  const f = sc?.stats1.freq;
+  return (
+    <g>
+      <FlyLead d="M-8 -66 C-8 -30 0 -40 0 0" color="#ffd84a" />
+      <FlyLead d="M6 -66 C6 -26 10 -34 10 0" color="#45e0f0" />
+      <FlyLead d="M20 -66 C20 -24 20 -30 20 0" color="#1d1f22" />
+      <PinTip x={0} y={0} />
+      <PinTip x={10} y={0} />
+      <PinTip x={20} y={0} />
+      <rect x={-20} y={-250} width={266} height={190} rx={9} fill="#2a2f35" />
+      <rect x={-20} y={-250} width={266} height={190} rx={9} fill="url(#g-shade-v)" opacity={0.5} />
+      <rect x={-8} y={-240} width={216} height={176} rx={4} fill="#14171a" />
+      <clipPath id="scope-screen"><rect x={SC_X} y={SC_Y} width={SC_W} height={SC_H} /></clipPath>
+      <rect x={SC_X} y={SC_Y} width={SC_W} height={SC_H} fill="#07120d" />
+      <g stroke="#2f6b49" strokeWidth={0.5} opacity={0.9}>
+        {Array.from({ length: 11 }, (_, i) => <line key={`v${i}`} x1={SC_X + i * 20} x2={SC_X + i * 20} y1={SC_Y} y2={SC_Y + SC_H} />)}
+        {Array.from({ length: 9 }, (_, i) => <line key={`h${i}`} x1={SC_X} x2={SC_X + SC_W} y1={SC_Y + i * 20} y2={SC_Y + i * 20} />)}
+      </g>
+      <g stroke="#3f8a60" strokeWidth={0.5}>
+        {Array.from({ length: 51 }, (_, i) => <line key={`mx${i}`} x1={SC_X + i * 4} x2={SC_X + i * 4} y1={SC_GROUND - 1.4} y2={SC_GROUND + 1.4} />)}
+      </g>
+      <g clipPath="url(#scope-screen)" fill="none" strokeLinejoin="round" strokeLinecap="round">
+        {sc && sc.t.length > 1 && (
+          <>
+            <path d={trace(sc.t, sc.ch2, tdiv, v2)} stroke="#45e0f0" strokeWidth={3.2} opacity={0.18} />
+            <path d={trace(sc.t, sc.ch2, tdiv, v2)} stroke="#6df0ff" strokeWidth={1.1} />
+            <path d={trace(sc.t, sc.ch1, tdiv, v1)} stroke="#ffd84a" strokeWidth={3.2} opacity={0.18} />
+            <path d={trace(sc.t, sc.ch1, tdiv, v1)} stroke="#ffe680" strokeWidth={1.1} />
+          </>
+        )}
+      </g>
+      {Number.isFinite(trig) && (
+        <path d={`M${SC_X + SC_W + 1} ${SC_GROUND - (trig / v1) * 20} l7 -3.5 v7 z`} fill="#ffd84a" opacity={0.9} />
+      )}
+      <g fontFamily="var(--font-mono)" fontSize={6}>
+        <text x={SC_X + 4} y={SC_Y + 9} fill="#ffe680">{f !== undefined ? (f >= 1000 ? `${(f / 1000).toFixed(2)} kHz` : `${f.toFixed(f < 100 ? 1 : 0)} Hz`) : "– Hz"}</text>
+        <text x={SC_X + 54} y={SC_Y + 9} fill="#ffe680">{sc?.stats1.duty !== undefined ? `${(sc.stats1.duty * 100).toFixed(0)} %` : ""}</text>
+        <text x={SC_X + SC_W - 4} y={SC_Y + 9} fill="#ffe680" textAnchor="end">{sc ? `${sc.stats1.vpp.toFixed(2)} Vpp` : ""}</text>
+        <text x={SC_X + 4} y={SC_Y + SC_H + 9} fill="#ffe680">CH1 {v1} V</text>
+        <text x={SC_X + 66} y={SC_Y + SC_H + 9} fill="#6df0ff">CH2 {v2} V</text>
+        <text x={SC_X + SC_W - 4} y={SC_Y + SC_H + 9} fill="#c8d4cc" textAnchor="end">{fmtT(tdiv)}/div {sc ? (sc.triggered ? "· TRIG" : "· AUTO") : ""}</text>
+      </g>
+      {/* decorative knobs */}
+      {[[222, -208], [222, -170], [222, -132], [222, -94]].map(([x, y]) => (
+        <g key={`${x}${y}`}>
+          <circle cx={x} cy={y} r={11} fill="#14171a" />
+          <circle cx={x} cy={y} r={8.4} fill="#3b4148" />
+          <circle cx={x} cy={y} r={8.4} fill="url(#g-dome)" />
+          <rect x={x - 0.9} y={y - 8} width={1.8} height={6} rx={0.9} fill="#e8eef0" />
+        </g>
+      ))}
+      <text x={-4} y={-70} fontSize={5} fill="#9aa4ab" fontFamily="var(--font-mono)">OSCILLOSCOPE</text>
+      <g fontSize={4} fill="#9aa4ab" fontFamily="var(--font-mono)" textAnchor="middle">
+        <text x={0} y={-3}>CH1</text>
+        <text x={10} y={-3}>CH2</text>
+        <text x={20} y={-3}>GND</text>
+      </g>
+    </g>
+  );
+}
+
 /* ---------- Dispatcher ---------- */
 
 interface GProps {
@@ -734,6 +946,10 @@ export function PartGraphic({ part, live }: GProps) {
     case "rgbled": return <RgbLed part={part} live={live} />;
     case "sevenseg": return <SevenSeg part={part} live={live} />;
     case "relay": return <Relay part={part} live={live} />;
+    case "servo": return <ServoGfx part={part} live={live} />;
+    case "hcsr04": return <Ultrasonic />;
+    case "lcd1602": return <Lcd part={part} live={live} />;
+    case "scope": return <Scope part={part} live={live} />;
     case "battery9v": return <Battery9V />;
     case "batteryAA2": return <AAHolder cells={2} />;
     case "batteryAA4": return <AAHolder cells={4} />;

@@ -57,15 +57,19 @@ function PropControl({ part, def }: { part: Part; def: PropDef }) {
   if (def.kind === "farads") return <ValueField part={part} def={def} unit="F" chips={FARAD_CHIPS} />;
   if (def.kind === "range") {
     const t = Number(part.props[def.key]);
+    const min = def.min ?? 0, max = def.max ?? 1, step = def.step ?? 0.005;
     return (
       <div className="field">
-        <label htmlFor={`f-${def.key}`}>{def.label}</label>
+        <label htmlFor={`f-${def.key}`}>
+          {def.label}
+          {def.unit && <span className="val">{t} {def.unit}</span>}
+        </label>
         <input
           id={`f-${def.key}`}
           type="range"
-          min={0}
-          max={1}
-          step={0.005}
+          min={min}
+          max={max}
+          step={step}
           value={t}
           onChange={(e) => setProp(part.id, def.key, Number(e.target.value), false)}
         />

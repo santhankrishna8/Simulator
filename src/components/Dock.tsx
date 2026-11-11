@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/store";
 
+const Plotter = dynamic(() => import("./Plotter"), { ssr: false });
 const Editor = dynamic(() => import("./Editor"), {
   ssr: false,
   loading: () => <p className="muted dock-pad">Loading editor…</p>,
@@ -141,8 +142,9 @@ export default function Dock() {
         <div className="seg" role="tablist" aria-label="Panel">
           <button type="button" role="tab" aria-selected={tab === "code"} onClick={() => set({ dockTab: "code" })}>Code</button>
           <button type="button" role="tab" aria-selected={tab === "serial"} onClick={() => set({ dockTab: "serial" })}>
-            Serial monitor{unread && tab !== "serial" && <i className="dot" aria-label="has output" />}
+            Serial monitor{unread && tab !== "serial" && tab !== "plotter" && <i className="dot" aria-label="has output" />}
           </button>
+          <button type="button" role="tab" aria-selected={tab === "plotter"} onClick={() => set({ dockTab: "plotter" })}>Plotter</button>
         </div>
         <BuildStatus />
         <div className="dock-actions">
@@ -158,8 +160,10 @@ export default function Dock() {
             <div className="editor"><Editor /></div>
             <Problems />
           </>
-        ) : (
+        ) : tab === "serial" ? (
           <SerialMonitor />
+        ) : (
+          <Plotter />
         )}
       </div>
     </section>

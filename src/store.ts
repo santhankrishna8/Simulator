@@ -68,7 +68,7 @@ interface State {
   /** Simulated seconds per real second, from the worker (1 is real time). */
   speed: number;
   dockOpen: boolean;
-  dockTab: "code" | "serial";
+  dockTab: "code" | "serial" | "plotter";
   dockH: number;
 
   setCode(code: string): void;

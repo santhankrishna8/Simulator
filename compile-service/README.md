@@ -1,6 +1,6 @@
 # Compile service
 
-Turns an Arduino sketch into a `.hex` file for the Uno. It calls `avr-gcc` directly with the official Arduino AVR core (1.8.6) and the Wire, SPI, EEPROM, SoftwareSerial and Servo libraries. The core and libraries are prebuilt once, so a typical sketch compiles in well under a second.
+Turns an Arduino sketch into a `.hex` file for the Uno. It calls `avr-gcc` directly with the official Arduino AVR core (1.8.6) and the Wire, SPI, EEPROM, SoftwareSerial, Servo and LiquidCrystal libraries. The core and libraries are prebuilt once, so a typical sketch compiles in well under a second.
 
 The Next.js app calls it through `/api/compile`. Vercel cannot run `avr-gcc`, so this runs as its own small container.
 

@@ -75,6 +75,11 @@ describe.skipIf(!existsSync(`${ROOT}/build/core.a`))("avr-gcc", () => {
     if (!r.ok) expect((r.diagnostics[0] as { message: string }).message).toMatch(/Not enough RAM/);
   });
 
+  it("links the LiquidCrystal library", async () => {
+    const r = await compile('#include <LiquidCrystal.h>\nLiquidCrystal lcd(12, 11, 5, 4, 3, 2);\nvoid setup(){ lcd.begin(16, 2); lcd.print("hi"); }\nvoid loop(){}\n');
+    expect(r.ok).toBe(true);
+  });
+
   it("links the Servo library", async () => {
     const r = await compile("#include <Servo.h>\nServo s;\nvoid setup(){ s.attach(9); }\nvoid loop(){ s.write(90); }\n");
     expect(r.ok).toBe(true);
